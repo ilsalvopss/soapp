@@ -138,12 +138,22 @@ public:
             throw error{"!OOM!"};
     }
 
-    [[nodiscard]] std::optional<node_view> root() const;
+    [[nodiscard]] std::optional<node_view> root() const {
+        const auto* root = xmlDocGetRootElement(doc_.get());
+
+        if (!root)
+            return std::nullopt;
+
+        return node_view{root};
+    }
 
 private:
     using ptr = std::unique_ptr<xmlDoc, deleter>;
 
-    explicit document(ptr);
+    explicit document(ptr doc) : doc_{std::move(doc)} {
+        if (!doc_)
+            throw error{"null XML document"};
+    }
 
     ptr doc_;
 };
