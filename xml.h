@@ -30,6 +30,28 @@ namespace detail {
     }
 }
 
+class owned_string {
+public:
+    explicit owned_string(xmlChar* p) noexcept : ptr_{p} {}
+
+    [[nodiscard]] std::string_view view() const noexcept {
+        return detail::as_string_view(ptr_.get());
+    }
+
+    [[nodiscard]] const char* c_str() const noexcept {
+        return reinterpret_cast<const char*>(ptr_.get());
+    }
+
+private:
+    struct deleter {
+        void operator()(xmlChar* p) const noexcept {
+            xmlFree(p);
+        }
+    };
+
+    std::unique_ptr<xmlChar, deleter> ptr_;
+};
+
 class error : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
@@ -44,6 +66,19 @@ class node_view {
 public:
     [[nodiscard]] std::string_view name() const noexcept {
         return detail::as_string_view(node_->name);
+    }
+
+    [[nodiscard]] std::string_view ns_uri() const noexcept {
+        return detail::as_string_view(node_->ns ? node_->ns->href : nullptr);
+    }
+
+    [[nodiscard]] owned_string text() const {
+        auto* content = xmlNodeGetContent(node_);
+
+        if (!content)
+            throw error{"!OOM!"};
+
+        return owned_string {content};
     }
 
 private:
