@@ -6,12 +6,16 @@
 #define SOAPP_XML_H
 
 #include "libxml/xmlreader.h"
+#include "libxml/uri.h"
 #include <fmt/chrono.h>
-#include <chrono>
+
+#include <filesystem>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #define xml_time(time)      fmt::format("{:%FT%TZ}", std::chrono::round<std::chrono::seconds>(time))
@@ -62,9 +66,13 @@ namespace detail {
 
 class owned_string {
 public:
+    owned_string() noexcept = default;
     explicit owned_string(xmlChar* p) noexcept : ptr_{p} {}
 
     [[nodiscard]] std::string_view view() const noexcept {
+        if (!ptr_)
+            return {};
+
         return detail::as_string_view(ptr_.get());
     }
 
@@ -73,7 +81,11 @@ public:
     }
 
     [[nodiscard]] const char* c_str() const noexcept {
-        return reinterpret_cast<const char*>(ptr_.get());
+        return ptr_ ? reinterpret_cast<const char*>(ptr_.get()) : "";
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return ptr_ != nullptr;
     }
 
 private:
@@ -90,6 +102,86 @@ class error : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+
+class uri {
+    class deleter {
+    public:
+        void operator()(xmlURI* uri) const noexcept {
+            xmlFreeURI(uri);
+        }
+    };
+
+    using parsed_uri = std::unique_ptr<xmlURI, deleter>;
+
+    std::string value_;
+    bool local_;
+
+    [[nodiscard]] static bool check_local_scheme(const std::string_view value) {
+        const std::string str{value};
+
+        const parsed_uri parsed{xmlParseURI(str.c_str())};
+
+        if (!parsed)
+            throw error{"Invalid URI: " + str};
+
+        if (!parsed->scheme)
+            throw error{"URI must be absolute: " + str};
+
+        return xmlStrcasecmp(BAD_CAST parsed->scheme, BAD_CAST "file") == 0;
+    }
+
+    [[nodiscard]] static std::string escape_path(const std::filesystem::path& path) {
+        const std::string value = path.generic_string(); // seems to be the one....
+
+        const owned_string escaped{ xmlURIEscapeStr(detail::as_xml(value), BAD_CAST "/:") };
+        if (!escaped)
+            throw error{"Failed to escape filesystem path: " + value};
+
+        return std::string{ *escaped };
+    }
+
+public:
+    explicit uri(std::string value = {})
+        : value_{std::move(value)}, local_{check_local_scheme(value_)} {}
+
+    [[nodiscard]] static uri from_path(const std::filesystem::path& path) {
+        if (path.empty())
+            throw error{"Filesystem path must not be empty"};
+
+        const auto absolute = std::filesystem::absolute(path);
+        const std::string escaped = escape_path(absolute);
+
+        return uri{"file://" + escaped};
+    }
+
+    [[nodiscard]] static uri from_path(const std::string_view path) {
+        return from_path(std::filesystem::path{std::string { path } });
+    }
+
+    // note that this is always absolute per our invariant
+    [[nodiscard]] uri resolve(const std::string_view reference) const {
+        const std::string ref{ reference };
+
+        const owned_string resolved { xmlBuildURI(detail::as_xml(ref), detail::as_xml(value_)) };
+        if (!resolved)
+            throw error { "Failed to resolve URI '" + ref + "' against '" + value_ + "'" };
+
+        return uri { std::string { *resolved } };
+    }
+
+    [[nodiscard]] std::string_view string() const noexcept {
+        return value_;
+    }
+
+    [[nodiscard]] const char* c_str() const noexcept {
+        return value_.c_str();
+    }
+
+    [[nodiscard]] bool local() const noexcept {
+        return local_;
+    }
+};
+
 
 class node_view {
     // let's be constructible only via a document
@@ -213,7 +305,7 @@ public:
     document(const document&) = delete;
     document& operator=(const document&) = delete;
 
-    [[nodiscard]] static document parse(const std::string_view source) {
+    [[nodiscard]] static document parse(const std::string_view source, uri&& base) {
         const std::unique_ptr<xmlParserCtxt, decltype(&xmlFreeParserCtxt)>
         ctxt = { xmlNewParserCtxt(), xmlFreeParserCtxt };
 
@@ -226,7 +318,7 @@ public:
             ctxt.get(),
             source.data(),
             static_cast<int>(source.size()),
-            nullptr,
+            base.string().empty() ? nullptr : base.c_str(),
             nullptr,
             XML_PARSE_NO_XXE
         );
@@ -238,10 +330,10 @@ public:
             throw error{"XML parsing failed"};
         }
 
-        return document{ptr{raw_doc}};
+        return document{ptr{raw_doc}, std::move( base )};
     }
 
-    [[nodiscard]] explicit document(const std::string_view version) {
+    [[nodiscard]] explicit document(const std::string_view version, uri&& base) : base_{std::move(base)} {
         // libxml2 wants a null-terminated string
         const std::string version_string{version};
 
@@ -260,15 +352,20 @@ public:
         return node_view{root};
     }
 
+    [[nodiscard]] uri base() const noexcept {
+        return base_;
+    }
+
 private:
     using ptr = std::unique_ptr<xmlDoc, deleter>;
 
-    explicit document(ptr doc) : doc_{std::move(doc)} {
+    explicit document(ptr doc, uri&& base) : doc_{std::move(doc)}, base_{std::move(base)} {
         if (!doc_)
             throw error{"null XML document"};
     }
 
     ptr doc_;
+    uri base_;
 };
 
 }

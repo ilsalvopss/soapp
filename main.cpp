@@ -1,13 +1,15 @@
-#include <iostream>
+#include <filesystem>
 #include <fstream>
 #include "wsdl.h"
 
 int main() {
-    std::ifstream t("../devicemgmt.wsdl");
+    const auto path = std::filesystem::absolute("../devicemgmt.wsdl");
+    std::ifstream t{path};
 
     std::string str((std::istreambuf_iterator<char>(t)),
                     std::istreambuf_iterator<char>());
 
-    auto w = soapp::wsdl::WSDL11(std::move(str));
+    auto base = soapp::xml::uri::from_path(path);
+    auto w = soapp::wsdl::WSDL11{str, std::move(base)};
 
 }
