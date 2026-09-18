@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -47,6 +48,37 @@ private:
     std::string ns_uri_;
 };
 
+class zstring_view {
+    const char* data_ = nullptr;
+
+public:
+    constexpr zstring_view() noexcept = default;
+
+    template <std::size_t N>
+    constexpr zstring_view(const char (&s)[N]) noexcept :
+    data_{s} {}
+
+    explicit constexpr zstring_view(const char* s) noexcept :
+    data_{s} {}
+
+    explicit zstring_view(const std::string& s) noexcept :
+    data_{s.c_str()} {}
+
+    [[nodiscard]] constexpr const char* c_str() const noexcept {
+        return data_;
+    }
+
+    // This conversion is intentionally named: std::string_view does not preserve
+    // the null-terminated precondition that this type represents.
+    [[nodiscard]] constexpr std::string_view view() const noexcept {
+        return data_ ? std::string_view{data_} : std::string_view{};
+    }
+
+    [[nodiscard]] constexpr bool empty() const noexcept {
+        return !data_ || *data_ == '\0';
+    }
+};
+
 namespace detail {
     [[nodiscard]] inline const xmlChar* as_xml(const char* str) noexcept {
         return reinterpret_cast<const xmlChar*>(str);
@@ -56,11 +88,16 @@ namespace detail {
         return as_xml(str.c_str());
     }
 
-    [[nodiscard]] inline std::string_view as_string_view(const xmlChar* str) noexcept {
-        if (!str)
-            return {};
+    [[nodiscard]] inline const xmlChar* as_xml(const zstring_view str) noexcept {
+        return as_xml(str.c_str());
+    }
 
-        return reinterpret_cast<const char*>(str);
+    [[nodiscard]] inline zstring_view as_zstring_view(const xmlChar* str) noexcept {
+        return zstring_view{reinterpret_cast<const char*>(str)};
+    }
+
+    [[nodiscard]] inline std::string_view as_string_view(const xmlChar* str) noexcept {
+        return as_zstring_view(str).view();
     }
 }
 
@@ -69,15 +106,12 @@ public:
     owned_string() noexcept = default;
     explicit owned_string(xmlChar* p) noexcept : ptr_{p} {}
 
-    [[nodiscard]] std::string_view view() const noexcept {
-        if (!ptr_)
-            return {};
-
-        return detail::as_string_view(ptr_.get());
+    [[nodiscard]] zstring_view zview() const noexcept {
+        return detail::as_zstring_view(ptr_.get());
     }
 
-    [[nodiscard]] std::string_view operator*() const noexcept {
-        return view();
+    [[nodiscard]] std::string_view view() const noexcept {
+        return zview().view();
     }
 
     [[nodiscard]] const char* c_str() const noexcept {
@@ -86,6 +120,10 @@ public:
 
     [[nodiscard]] explicit operator bool() const noexcept {
         return ptr_ != nullptr;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const owned_string& str) {
+        return os << str.c_str();
     }
 
 private:
@@ -104,28 +142,19 @@ public:
 };
 
 class uri {
-    class deleter {
-    public:
-        void operator()(xmlURI* uri) const noexcept {
-            xmlFreeURI(uri);
-        }
-    };
-
-    using parsed_uri = std::unique_ptr<xmlURI, deleter>;
-
     std::string value_;
     bool local_;
 
-    [[nodiscard]] static bool check_local_scheme(const std::string_view value) {
-        const std::string str{value};
-
-        const parsed_uri parsed{xmlParseURI(str.c_str())};
+    // note that this also checks the URI's validity
+    // maybe TODO: fix naming
+    [[nodiscard]] static bool check_local_scheme(const zstring_view value) {
+        const std::unique_ptr<xmlURI, decltype(&xmlFreeURI)> parsed{ xmlParseURI(value.c_str()), &xmlFreeURI };
 
         if (!parsed)
-            throw error{"Invalid URI: " + str};
+            throw error{ "Invalid URI" };
 
         if (!parsed->scheme)
-            throw error{"URI must be absolute: " + str};
+            throw error{ "URI must be absolute" };
 
         return xmlStrcasecmp(BAD_CAST parsed->scheme, BAD_CAST "file") == 0;
     }
@@ -137,12 +166,13 @@ class uri {
         if (!escaped)
             throw error{"Failed to escape filesystem path: " + value};
 
-        return std::string{ *escaped };
+        return std::string{ escaped.view() };
     }
 
 public:
+    // note: remember in the future that a successful construction guarantees that the URI is valid and absolute
     explicit uri(std::string value = {})
-        : value_{std::move(value)}, local_{check_local_scheme(value_)} {}
+        : value_{std::move(value)}, local_{check_local_scheme(zstring_view { value_ })} {}
 
     [[nodiscard]] static uri from_path(const std::filesystem::path& path) {
         if (path.empty())
@@ -155,18 +185,16 @@ public:
     }
 
     [[nodiscard]] static uri from_path(const std::string_view path) {
-        return from_path(std::filesystem::path{std::string { path } });
+        return from_path(std::filesystem::path { std::string { path } });
     }
 
     // note that this is always absolute per our invariant
-    [[nodiscard]] uri resolve(const std::string_view reference) const {
-        const std::string ref{ reference };
-
+    [[nodiscard]] uri resolve(const zstring_view ref) const {
         const owned_string resolved { xmlBuildURI(detail::as_xml(ref), detail::as_xml(value_)) };
         if (!resolved)
-            throw error { "Failed to resolve URI '" + ref + "' against '" + value_ + "'" };
+            throw error { "Failed to resolve URI " + std::string{ref.view()} + " against base " + value_ };
 
-        return uri { std::string { *resolved } };
+        return uri { std::string { resolved.view() } };
     }
 
     [[nodiscard]] std::string_view string() const noexcept {
@@ -213,15 +241,13 @@ public:
     }
 
     [[nodiscard]] std::optional<owned_string> attribute(
-        const std::string_view local_name, const std::string_view namespace_uri = {}) const {
+        const zstring_view local_name, const zstring_view namespace_uri = {}) const {
         xmlChar* value = nullptr;
-
-        const std::string local_name_s{local_name};
 
         const auto r =
             xmlNodeGetAttrValue(node_,
-                detail::as_xml(local_name_s),
-                namespace_uri.empty() ? nullptr : detail::as_xml(std::string{namespace_uri}),
+                detail::as_xml(local_name),
+                namespace_uri.empty() ? nullptr : detail::as_xml(namespace_uri),
                 &value);
 
         if (r == -1)
@@ -333,11 +359,8 @@ public:
         return document{ptr{raw_doc}, std::move( base )};
     }
 
-    [[nodiscard]] explicit document(const std::string_view version, uri&& base) : base_{std::move(base)} {
-        // libxml2 wants a null-terminated string
-        const std::string version_string{version};
-
-        doc_.reset(xmlNewDoc(detail::as_xml(version_string)));
+    [[nodiscard]] explicit document(const zstring_view version, uri&& base) : base_{std::move(base)} {
+        doc_.reset(xmlNewDoc(detail::as_xml(version)));
 
         if (!doc_)
             throw error{"!OOM!"};

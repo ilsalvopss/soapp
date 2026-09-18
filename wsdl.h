@@ -59,10 +59,10 @@ public:
                 continue;
             }
 
-            std::cout << "Found wsdl:import: location=" << **location_attr
-                      << ", namespace=" << **namespace_attr << std::endl;
+            std::cout << "Found wsdl:import: location=" << *location_attr
+                      << ", namespace=" << *namespace_attr << std::endl;
 
-            auto resolved_uri = base().resolve(**location_attr);
+            auto resolved_uri = base().resolve(location_attr->zview());
             if (!base().local() && resolved_uri.local()) {
                 std::cout << "Remote WSDL wants to import local file... smelly?? Skipping" << std::endl;
                 continue;

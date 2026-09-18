@@ -48,7 +48,7 @@ public:
         SimpleParsedType type;
 
         if (const auto name = simple_type.attribute("name"))
-            type.name = xml::qname{**name, target_ns};
+            type.name = xml::qname{name->view(), target_ns};
 
         if (const auto restriction = simple_type.child("restriction", ns_uri))
             return parse_atomic(type, *restriction);
@@ -66,6 +66,7 @@ public:
         throw error{"Unsupported xs:simpleType variety;"};
     }
 
+    // i'm quite sure that "atomic" has another meaning in the spec... anyway..
     static SimpleParsedType parse_atomic(SimpleParsedType& type, const xml::node_view& restriction) {
         const auto base = restriction.attribute("base");
 
@@ -75,7 +76,7 @@ public:
         if (!base)
             throw error{"Missing required xs:restriction/@base"};
 
-        type.base = TypeRef{ restriction.resolve_qname(**base) };
+        type.base = TypeRef{ restriction.resolve_qname(base->view()) };
 
         return type;
     }
@@ -117,7 +118,7 @@ public:
         ComplexParsedType type;
 
         if (const auto name = complex_type.attribute("name"))
-            type.name = xml::qname{**name, target_ns};
+            type.name = xml::qname{name->view(), target_ns};
 
         // CHEATING EH !
 
@@ -147,8 +148,7 @@ public:
         // - import is for schemas in a different namespace (targetNamespace)
 
         for (const auto include : schema_.children("include", ns_uri)) {
-            auto schemaLocation_attr = include.attribute("schemaLocation");
-
+            const auto schemaLocation_attr = include.attribute("schemaLocation");
             if (!schemaLocation_attr) {
                 // § 4.2.1
                 // It is not an error for the ·actual value· of the schemaLocation [attribute] to fail
@@ -156,45 +156,36 @@ public:
                 continue;
             }
 
-            std::cout << "Found xs:include: schemaLocation=" << **schemaLocation_attr << std::endl;
-
-            xml::uri resolved_uri = base_.resolve(**schemaLocation_attr);
+            xml::uri resolved_uri = base_.resolve(schemaLocation_attr->zview());
             if (!base_.local() && resolved_uri.local()) {
                 std::cout << "Remote schema wants to import local file... smelly?? Skipping" << std::endl;
                 continue;
             }
 
-            std::cout << "Resolved xs:include schemaLocation to: " << resolved_uri.string() << std::endl;
-
-            auto schema_content = io::fetch(resolved_uri.string());
+            const auto schema_content = io::fetch(resolved_uri.string());
 
             auto doc = xml::document::parse(schema_content, std::move(resolved_uri));
             imported_schemas.emplace_back(std::move(doc));
         }
 
         for (const auto import : schema_.children("import", ns_uri)) {
-            auto namespace_attr = import.attribute("namespace");
-            auto schemaLocation_attr = import.attribute("schemaLocation");
+            const auto namespace_attr = import.attribute("namespace");
+            const auto schemaLocation_attr = import.attribute("schemaLocation");
 
             if (!schemaLocation_attr)
                 throw error{"Missing required xs:import/@schemaLocation"};
 
-            std::cout << "Found xs:import: namespace=" << (namespace_attr ? **namespace_attr : "")
-                      << ", schemaLocation=" << **schemaLocation_attr << std::endl;
-
-            xml::uri resolved_uri = base_.resolve(**schemaLocation_attr);
+            xml::uri resolved_uri = base_.resolve(schemaLocation_attr->zview());
             if (!base_.local() && resolved_uri.local()) {
                 std::cout << "Remote schema wants to import local file... smelly?? Skipping" << std::endl;
                 continue;
             }
 
-            std::cout << "Resolved xs:import schemaLocation to: " << resolved_uri.string() << std::endl;
-
-            auto schema_content = io::fetch(resolved_uri.string());
+            const auto schema_content = io::fetch(resolved_uri.string());
 
             auto doc = xml::document::parse(schema_content, std::move(resolved_uri));
             auto imported_schema = XSDSchema{std::move(doc)};
-            if (namespace_attr && imported_schema.target_namespace() != **namespace_attr)
+            if (namespace_attr && imported_schema.target_namespace() != namespace_attr->view())
                 throw error{"Imported schema targetNamespace does not match xs:import/@namespace"};
 
             imported_schemas.push_back(std::move(imported_schema));
@@ -247,13 +238,16 @@ private:
         return xml::qname{ name, target_namespace_ };
     }
 
-    // if this backs a document, keep it alive so that the schema node is valid
+    // if this backs a document (i.e. no other document embeds this scheme, such as in wsdl's <types>),
+    // keep it alive so that the schema node is safely alive
+    // there is a recurring argument in my mind if this is actually a sign that
+    // the schema should actually be a : document; however I guess this is a reasonable compromise for now
     std::unique_ptr<xml::document> document_;
 
-    xml::node_view schema_;
-    std::string target_namespace_;
-    xml::uri base_;
-    std::vector<XSDSchema> imported_schemas;
+    xml::node_view schema_;                  // the schema node itself, which is the root of this schema
+    std::string target_namespace_;           // the target namespace of this schema, if any
+    xml::uri base_;                          // the base URI of this schema (<import>s somewhat need it)
+    std::vector<XSDSchema> imported_schemas; // XSD schemas imported via <import> and <include> elements
 };
 
 }
