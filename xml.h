@@ -26,6 +26,15 @@ namespace soapp::xml {
 
 class qname {
 public:
+    struct hash {
+        // https://stackoverflow.com/questions/5889238/why-is-xor-the-default-way-to-combine-hashes
+        [[nodiscard]] std::size_t operator()(const qname& name) const noexcept {
+            const auto namespace_hash = std::hash<std::string_view>{}(name.ns_uri());
+            const auto local_hash = std::hash<std::string_view>{}(name.local_name());
+            return namespace_hash ^ (local_hash + 0x9e3779b9 + (namespace_hash << 6) + (namespace_hash >> 2));
+        }
+    };
+
     qname() = default;
 
     qname(const std::string_view local_name, const std::string_view namespace_uri) :
