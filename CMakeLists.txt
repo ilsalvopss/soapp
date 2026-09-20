@@ -11,5 +11,12 @@ find_package(fmt)
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 
-add_executable(soapp main.cpp)
+add_executable(soapp
+    main.cpp
+    io.cpp
+    type_table.cpp
+    wsdl.cpp
+    xml.cpp
+    xsd_types.cpp
+)
 target_link_libraries(soapp fmt::fmt OpenSSL::SSL CURL::libcurl LibXml2::LibXml2)

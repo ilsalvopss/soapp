@@ -6,17 +6,14 @@
 #define SOAPP_XSD_TYPES_H
 
 #include "xml.h"
-#include "io.h"
 
 #include <cstdint>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_set>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -66,7 +63,7 @@ public:
 private:
     Definition definition_;
 
-    explicit SimpleParsedType(Definition definition) : definition_{std::move(definition)} {}
+    explicit SimpleParsedType(Definition definition);
 
 public:
     [[nodiscard]] static SimpleParsedType from_node(
@@ -85,20 +82,9 @@ public:
         const xml::node_view& union_,
         const wsdl::TypeTable& type_table);
 
-    [[nodiscard]] const Definition& definition() const noexcept {
-        return definition_;
-    }
+    [[nodiscard]] const Definition& definition() const noexcept;
 
-    [[nodiscard]] std::string print() const {
-        if (const auto* restriction = std::get_if<Restriction>(&definition_))
-            return fmt::format("SimpleParsedType(restriction of ={})", restriction->base);
-
-        if (const auto* list = std::get_if<List>(&definition_))
-            return fmt::format("SimpleParsedType(list of ={})", list->item_type);
-
-        const auto& union_ = std::get<Union>(definition_);
-        return fmt::format("SimpleParsedType(union_members={})", union_.member_types.size());
-    }
+    [[nodiscard]] std::string print() const;
 };
 
 // https://www.w3.org/TR/xmlschema-1/#Complex_Type_Definitions
@@ -154,14 +140,12 @@ public:
 private:
     Definition definition_;
 
-    explicit ComplexParsedType(Definition definition) : definition_{std::move(definition)} {}
+    explicit ComplexParsedType(Definition definition);
 
 public:
     static ComplexParsedType from_node(const xml::node_view& complex_type, wsdl::TypeTable& type_table);
 
-    [[nodiscard]] const Definition& definition() const noexcept {
-        return definition_;
-    }
+    [[nodiscard]] const Definition& definition() const noexcept;
 
 private:
     static Occurs parse_occurs(const xml::node_view& element);
@@ -194,63 +178,9 @@ public:
     XSDSchema(XSDSchema&&) noexcept = default;
     XSDSchema& operator=(XSDSchema&&) noexcept = default;
 
-    explicit XSDSchema(xml::document&& doc) : XSDSchema(doc.root().value(), doc.base()) {
-        document_ = std::make_unique<xml::document>(std::move(doc));
-    }
+    explicit XSDSchema(xml::document&& doc);
 
-    explicit XSDSchema(const xml::node_view schema, xml::uri&& base) :
-    schema_{schema}, target_namespace_{find_target_namespace(schema)}, base_{base} {
-        if (!schema_.is("schema", ns_uri))
-            throw error{"Expected xs:schema"};
-
-        // As far as I understood, <import> and <include> both allow to "include" other schemas, but:
-        // - include is for schemas in the same namespace (targetNamespace), so definitions are merged into this schema
-        // - import is for schemas in a different namespace (targetNamespace)
-
-        for (const auto include : schema_.children("include", ns_uri)) {
-            const auto schemaLocation_attr = include.attribute("schemaLocation");
-            if (!schemaLocation_attr) {
-                // § 4.2.1
-                // It is not an error for the ·actual value· of the schemaLocation [attribute] to fail
-                // to resolve it all, in which case no corresponding inclusion is performed
-                continue;
-            }
-
-            xml::uri resolved_uri = base_.resolve(schemaLocation_attr->zview());
-            if (!base_.local() && resolved_uri.local()) {
-                std::cout << "Remote schema wants to import local file... smelly?? Skipping" << std::endl;
-                continue;
-            }
-
-            const auto schema_content = io::fetch(resolved_uri.string());
-
-            auto doc = xml::document::parse(schema_content, std::move(resolved_uri));
-            imported_schemas.emplace_back(std::move(doc));
-        }
-
-        for (const auto import : schema_.children("import", ns_uri)) {
-            const auto namespace_attr = import.attribute("namespace");
-            const auto schemaLocation_attr = import.attribute("schemaLocation");
-
-            if (!schemaLocation_attr)
-                throw error{"Missing required xs:import/@schemaLocation"};
-
-            xml::uri resolved_uri = base_.resolve(schemaLocation_attr->zview());
-            if (!base_.local() && resolved_uri.local()) {
-                std::cout << "Remote schema wants to import local file... smelly?? Skipping" << std::endl;
-                continue;
-            }
-
-            const auto schema_content = io::fetch(resolved_uri.string());
-
-            auto doc = xml::document::parse(schema_content, std::move(resolved_uri));
-            auto imported_schema = XSDSchema{std::move(doc)};
-            if (namespace_attr && imported_schema.target_namespace() != namespace_attr->view())
-                throw error{"Imported schema targetNamespace does not match xs:import/@namespace"};
-
-            imported_schemas.push_back(std::move(imported_schema));
-        }
-    }
+    explicit XSDSchema(const xml::node_view schema, xml::uri&& base);
 
     [[nodiscard]] const std::string& target_namespace() const noexcept {
         return target_namespace_;
@@ -262,26 +192,12 @@ public:
 
 private:
     // (Construction helper) Find the target namespace of this schema, if any.
-    [[nodiscard]] static std::string find_target_namespace(const xml::node_view& schema) {
-        if (const auto target_ns = schema.attribute("targetNamespace"))
-            return std::string{target_ns->view()};
-
-        return {};
-    }
+    [[nodiscard]] static std::string find_target_namespace(const xml::node_view& schema);
 
     // Given a local name, return the qualified name in this schema's target namespace.
-    [[nodiscard]] inline xml::qname declared_name(const std::string_view name) const {
-        return xml::qname{ name, target_namespace_ };
-    }
+    [[nodiscard]] xml::qname declared_name(std::string_view name) const;
 
-    [[nodiscard]] bool mark_visited(SchemaContext& context) const {
-        // https://en.cppreference.com/cpp/container/unordered_set/emplace
-
-        if (document_)
-            return context.visited_documents.emplace(base_.string()).second;
-        
-        return true;
-    }
+    [[nodiscard]] bool mark_visited(SchemaContext& context) const;
 
     // if this backs a document (i.e. no other document embeds this scheme, such as in wsdl's <types>),
     // keep it alive so that the schema node is safely alive
