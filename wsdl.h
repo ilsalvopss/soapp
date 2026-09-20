@@ -8,6 +8,7 @@
 #include "io.h"
 #include "xml.h"
 #include "xsd_types.h"
+#include "type_table.h"
 
 #include <iostream>
 
@@ -21,6 +22,7 @@ class WSDL11 : protected xml::document {
 
     const xml::node_view definitions; // fast track to root node of the WSDL document
 
+    TypeTable types_;
     std::vector<xsd::XSDSchema> imported_schemas; // XSD schemas imported via <import> elements
     std::vector<WSDL11> imported_wsdl; // WSDL documents imported via <import> elements
 
@@ -39,6 +41,10 @@ public:
         using std::runtime_error::runtime_error;
     };
 
+    [[nodiscard]] const TypeTable& type_table() const noexcept {
+        return types_;
+    }
+
     explicit WSDL11(const std::string_view source, xml::uri&& base) :
     WSDL11(xml::document::parse(source, std::move(base))) {}
 
@@ -49,6 +55,8 @@ public:
         // check for <import>s and handle them if necessary
         // wsdl spec is really strange here... the imported file could be another WSDL or a schema (XSD) file
         // and maybe even anything else
+
+        std::vector<xsd::XSDSchema> local_schemas;
 
         for (const auto import : definitions.children("import", ns_uri)) {
             auto location_attr = import.attribute("location");
@@ -88,24 +96,38 @@ public:
             for (const auto schema : types->children()) {
                 xsd::XSDSchema xsd{ schema, base() };
 
-                for (const auto& simple_type : xsd.parse_simple()) {
-                    fmt::print("Parsed simple type: {}\n", simple_type.print());
-                }
-
-                for (const auto& complex_type : xsd.parse_complex()) {
-                    fmt::print("Parsed complex type: {}\n", complex_type.print());
-                }
+                local_schemas.emplace_back(std::move(xsd));
             }
-
-            // From the spec:
-            // "...since it is unreasonable to expect a single type system grammar can be used to describe
-            // all abstract types present and future, WSDL allows type systems to be added via extensibility elements.
-            // An extensibility element may appear under the types element to identify the type definition system
-            // being used and to provide an XML container element for the type definitions.
-            // The role of this element can be compared to that of the schema element of the XML Schema language."
-
-            // Maybe in the future...
         }
+
+        // declaration phase!
+        xsd::SchemaContext declaration_context{types_};
+
+        for (const auto& schema : imported_schemas)
+            schema.declare_types(declaration_context);
+
+        for (const auto& wsdl : imported_wsdl)
+            for (const auto& schema : wsdl.imported_schemas)
+                schema.declare_types(declaration_context);
+
+        for (const auto& schema : local_schemas)
+            schema.declare_types(declaration_context);
+
+        std::cout << "Declared " << types_.size() << " types" << std::endl;
+
+        xsd::SchemaContext definition_context{types_};
+
+        for (const auto& schema : imported_schemas)
+            schema.define_types(definition_context);
+
+        for (const auto& wsdl : imported_wsdl)
+            for (const auto& schema : wsdl.imported_schemas)
+                schema.define_types(definition_context);
+
+        for (const auto& schema : local_schemas)
+            schema.define_types(definition_context);
+
+        std::cout << "Defined " << types_.size() << " types" << std::endl;
     }
 };
 

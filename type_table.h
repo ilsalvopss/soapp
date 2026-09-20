@@ -11,7 +11,6 @@
 
 #include <fmt/format.h>
 
-#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -23,7 +22,7 @@ namespace soapp::wsdl {
 
 class TypeTable {
 public:
-    using TypeId = std::uint32_t;
+    using TypeId = xsd::TypeRef;
 
     using Definition = std::variant<
         std::monostate,
@@ -43,25 +42,15 @@ public:
         Type(std::optional<xml::qname> name, const TypeId id, Definition definition) :
             name_{std::move(name)}, id_{id}, definition_{std::move(definition)} {}
 
-        [[nodiscard]] TypeId id() const noexcept {
-            return id_;
-        }
+        [[nodiscard]] TypeId id() const noexcept { return id_; }
 
-        [[nodiscard]] const std::optional<xml::qname>& name() const noexcept {
-            return name_;
-        }
+        [[nodiscard]] const std::optional<xml::qname>& name() const noexcept { return name_; }
 
-        [[nodiscard]] const Definition& definition() const noexcept {
-            return definition_;
-        }
+        [[nodiscard]] const Definition& definition() const noexcept { return definition_; }
 
-        [[nodiscard]] Definition& definition() noexcept {
-            return definition_;
-        }
+        [[nodiscard]] Definition& definition() noexcept { return definition_; }
 
-        [[nodiscard]] bool defined() const noexcept {
-            return !std::holds_alternative<std::monostate>(definition_);
-        }
+        [[nodiscard]] bool defined() const noexcept { return !std::holds_alternative<std::monostate>(definition_); }
     };
 
     TypeTable() {
@@ -88,7 +77,7 @@ public:
         return id;
     }
 
-    void define(const TypeId id, Definition definition) {
+    void define(const TypeId id, Definition&& definition) {
         auto& type = get(id);
         if (type.defined())
             throw std::runtime_error{ fmt::format("Type {} is already defined", id) };
@@ -108,7 +97,8 @@ public:
             return *id;
 
         throw std::runtime_error{
-            fmt::format("Unknown XSD type: {}:{}", name.ns_uri(), name.local_name())};
+            fmt::format("Unknown XSD type: {}:{}", name.ns_uri(), name.local_name())
+        };
     }
 
     [[nodiscard]] const Type& get(const TypeId id) const {
@@ -116,6 +106,10 @@ public:
             throw std::out_of_range{"Invalid XSD TypeId"};
 
         return types_[id];
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return types_.size();
     }
 
 private:
@@ -136,6 +130,136 @@ private:
     std::vector<Type> types_;
     std::unordered_map<xml::qname, TypeId, xml::qname::hash> names_;
 };
+
+}
+
+namespace soapp::xsd {
+
+inline SimpleParsedType SimpleParsedType::from_node(const xml::node_view& simple_type, const wsdl::TypeTable& type_table) {
+    const auto restriction = simple_type.child("restriction", ns_uri);
+    const auto list = simple_type.child("list", ns_uri);
+    const auto union_ = simple_type.child("union", ns_uri);
+
+    const auto variety_count = static_cast<unsigned>(restriction.has_value())
+                                     + static_cast<unsigned>(list.has_value())
+                                     + static_cast<unsigned>(union_.has_value());
+    if (variety_count != 1)
+        throw error{"xs:simpleType must contain exactly one of xs:restriction, xs:list, or xs:union"};
+
+    if (restriction)
+        return parse_restriction(*restriction, type_table);
+
+    if (list)
+        return parse_list(*list, type_table);
+
+    if (union_)
+        return parse_union(*union_, type_table);
+
+    throw error{"Unsupported xs:simpleType variety"};
+}
+
+inline SimpleParsedType SimpleParsedType::parse_restriction(
+    const xml::node_view& restriction,
+    const wsdl::TypeTable& type_table) {
+    const auto base = restriction.attribute("base");
+    const auto inline_simple_type = restriction.child("simpleType", ns_uri);
+
+    // The spec says there must be exactly one xs:restriction/@base or
+    // xs:restriction/xs:simpleType child, not both.
+    if (!base && !inline_simple_type)
+        throw error{"Missing required xs:restriction/@base or xs:restriction/xs:simpleType"};
+
+    if (base && inline_simple_type)
+        throw error{"Both xs:restriction/@base and xs:restriction/xs:simpleType are present; only one is allowed"};
+
+    if (!base) {
+        throw error{"Inline xs:restriction/xs:simpleType is not supported yet"};
+    } else {
+        const auto base_name = restriction.resolve_qname(base->view());
+        const auto base_id = type_table.resolve(base_name);
+
+        return SimpleParsedType{ Restriction{base_id} };
+    }
+}
+
+inline SimpleParsedType SimpleParsedType::parse_list(const xml::node_view& list, const wsdl::TypeTable& type_table) {
+    TypeRef item_id;
+
+    if (const auto item_type_attr = list.attribute("itemType")) {
+        const auto item_name = list.resolve_qname(item_type_attr->view());
+        item_id = type_table.resolve(item_name);
+    } else if (list.child("simpleType", ns_uri)) {
+        throw error{"Inline xs:list/xs:simpleType is not supported yet"};
+    } else {
+        throw error{"Missing required xs:list/@itemType or xs:list/xs:simpleType"};
+    }
+
+    return SimpleParsedType{ List{item_id} };
+}
+
+inline SimpleParsedType SimpleParsedType::parse_union(const xml::node_view& union_,const wsdl::TypeTable& type_table) {
+    std::vector<TypeRef> member_types;
+
+    std::cerr << "Warning: xs:union is not supported yet; doing a fake parse" << std::endl;
+
+    return SimpleParsedType{Union{std::move(member_types)}};
+}
+
+inline void XSDSchema::declare_types(SchemaContext& context) const {
+    if (!mark_visited(context))
+        return;
+
+    for (const auto& imported_schema : imported_schemas)
+        imported_schema.declare_types(context);
+
+    for (const auto simple_type : schema_.children("simpleType", ns_uri)) {
+        const auto name = simple_type.attribute("name");
+        if (!name)
+            continue;
+
+        (void)context.types.declare(xml::qname{ name->view(), target_namespace_ });
+    }
+
+    for (const auto complex_type : schema_.children("complexType", ns_uri)) {
+        const auto name = complex_type.attribute("name");
+        if (!name)
+            continue;
+
+        (void)context.types.declare(xml::qname{ name->view(), target_namespace_ });
+    }
+}
+
+inline void XSDSchema::define_types(SchemaContext& context) const {
+    if (!mark_visited(context))
+        return;
+
+    for (const auto& imported_schema : imported_schemas)
+        imported_schema.define_types(context);
+
+    for (const auto simple_type : schema_.children("simpleType", ns_uri)) {
+        const auto name = simple_type.attribute("name");
+        TypeRef id;
+
+        if (name)
+            id = context.types.resolve(xml::qname{ name->view(), target_namespace_ });
+        else
+            id = context.types.add_anonymous();
+
+        context.types.define(id, SimpleParsedType::from_node(simple_type, context.types));
+    }
+
+    for (const auto complex_type : schema_.children("complexType", ns_uri)) {
+        const auto name = complex_type.attribute("name");
+        TypeRef id;
+
+        if (name)
+            id = context.types.resolve(xml::qname{ name->view(), target_namespace_ });
+        else
+            id = context.types.add_anonymous();
+
+        context.types.define(id, ComplexParsedType::from_node(complex_type, target_namespace_, context.types));
+    }
+}
 
 }
 

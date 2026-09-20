@@ -12,21 +12,57 @@ namespace soapp::xsd {
 
 class BuiltinType {};
 
-// This is intentionally the small, commonly encountered subset for now.  It
-// can grow as the code generator acquires mappings for more XSD datatypes.
-inline constexpr std::array<std::string_view, 11> builtinTypes = {
+// This is not so small anymore.
+// Implementing all these types is a lot of work,
+// so for now we just declare them as built-in types and don't implement them.
+inline constexpr auto builtinTypes = std::to_array<std::string_view>({
+    "anyType",
+    "anySimpleType",
     "string",
+    "normalizedString",
+    "token",
+    "language",
+    "Name",
+    "NCName",
+    "ID",
+    "IDREF",
+    "IDREFS",
+    "ENTITY",
+    "ENTITIES",
+    "NMTOKEN",
+    "NMTOKENS",
     "boolean",
+    "base64Binary",
+    "hexBinary",
     "decimal",
     "float",
     "double",
+    "duration",
+    "dateTime",
+    "time",
+    "date",
+    "gYearMonth",
+    "gYear",
+    "gMonthDay",
+    "gDay",
+    "gMonth",
+    "anyURI",
+    "QName",
+    "NOTATION",
     "integer",
+    "nonPositiveInteger",
+    "negativeInteger",
     "int",
     "long",
     "short",
     "byte",
-    "dateTime",
-};
+    "nonNegativeInteger",
+    "unsignedLong",
+    "unsignedInt",
+    "unsignedShort",
+    "unsignedByte",
+    "positiveInteger",
+});
 
 }
 

@@ -8,12 +8,21 @@
 #include "xml.h"
 #include "io.h"
 
+#include <cstdint>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <variant>
 #include <vector>
+
+namespace soapp::wsdl {
+class TypeTable;
+}
 
 namespace soapp::xsd {
 
@@ -27,102 +36,81 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-using TypeRef = xml::qname;
+// A resolved reference into the TypeTable.
+using TypeRef = std::uint32_t;
+
+class XSDSchema;
+
+struct SchemaContext {
+    wsdl::TypeTable& types;
+    std::unordered_set<std::string> visited_documents;
+};
 
 // https://www.w3.org/TR/xmlschema-1/#Simple_Type_Definitions
 class SimpleParsedType {
-    enum class Variety {
-        atomic_,
-        union_,
-        list_
+public:
+    struct Restriction {
+        TypeRef base;
     };
 
-    // Empty for anonymous inline simple types.
-    std::optional<xml::qname> name;
+    struct List {
+        TypeRef item_type;
+    };
 
-    TypeRef base;
-    Variety variety = Variety::atomic_;
+    struct Union {
+        std::vector<TypeRef> member_types;
+    };
+
+    using Definition = std::variant<Restriction, List, Union>;
+
+private:
+    Definition definition_;
+
+    explicit SimpleParsedType(Definition definition) : definition_{std::move(definition)} {}
 
 public:
-    [[nodiscard]] static SimpleParsedType from_node(const xml::node_view& simple_type, const std::string_view target_ns) {
-        SimpleParsedType type;
+    [[nodiscard]] static SimpleParsedType from_node(
+        const xml::node_view& simple_type,
+        const wsdl::TypeTable& type_table);
 
-        if (const auto name = simple_type.attribute("name"))
-            type.name = xml::qname{name->view(), target_ns};
+    static SimpleParsedType parse_restriction(
+        const xml::node_view& restriction,
+        const wsdl::TypeTable& type_table);
 
-        if (const auto restriction = simple_type.child("restriction", ns_uri))
-            return parse_atomic(type, *restriction);
+    static SimpleParsedType parse_list(
+        const xml::node_view& list,
+        const wsdl::TypeTable& type_table);
 
-        if (const auto list = simple_type.child("list", ns_uri)) {
-            std::cerr << "Found xs:list simpleType; not implemented yet" << std::endl;
-            return type;
-        }
+    static SimpleParsedType parse_union(
+        const xml::node_view& union_,
+        const wsdl::TypeTable& type_table);
 
-        if (const auto union_ = simple_type.child("union", ns_uri)) {
-            std::cerr << "Found xs:union simpleType; not implemented yet" << std::endl;
-            return type;
-        }
-
-        throw error{"Unsupported xs:simpleType variety;"};
-    }
-
-    // i'm quite sure that "atomic" has another meaning in the spec... anyway..
-    static SimpleParsedType parse_atomic(SimpleParsedType& type, const xml::node_view& restriction) {
-        const auto base = restriction.attribute("base");
-
-        // TODO: support inline simpleType definitions as base types
-        // The spec says there must be exactly one xs:restriction/@base or xs:restriction/xs:simpleType child. not both
-
-        if (!base)
-            throw error{"Missing required xs:restriction/@base"};
-
-        type.base = TypeRef{ restriction.resolve_qname(base->view()) };
-
-        return type;
+    [[nodiscard]] const Definition& definition() const noexcept {
+        return definition_;
     }
 
     [[nodiscard]] std::string print() const {
-        return fmt::format("SimpleParsedType(name={}, ns={}, base={}, variety={})",
-                           name ? name->local_name() : "<anonymous>",
-                           name ? name->ns_uri() : "<>",
-                           std::string(base.ns_uri()) + ":" + std::string(base.local_name()),
-                           variety == Variety::atomic_ ? "atomic" : "unknown");
+        if (const auto* restriction = std::get_if<Restriction>(&definition_))
+            return fmt::format("SimpleParsedType(restriction of ={})", restriction->base);
+
+        if (const auto* list = std::get_if<List>(&definition_))
+            return fmt::format("SimpleParsedType(list of ={})", list->item_type);
+
+        const auto& union_ = std::get<Union>(definition_);
+        return fmt::format("SimpleParsedType(union_members={})", union_.member_types.size());
     }
 };
 
 class ComplexParsedType {
-    enum class Derivation {
-        none,
-        extension,
-        restriction
-    };
-
-    // Not parsed yet; kept as the shape to grow into.
-    std::optional<xml::qname> name;
-    std::optional<TypeRef> base;
-    Derivation derivation = Derivation::none;
-
-    //std::vector<ParsedElement> elements;
 
 public:
+    static ComplexParsedType from_node(
+        const xml::node_view& complex_type,
+        const std::string& target_namespace,
+        const wsdl::TypeTable& type_table) {}
+
     [[nodiscard]] std::string print() const {
-        return fmt::format("ComplexParsedType(name={}, ns={}, base={}, derivation={})",
-                           name ? name->local_name() : "<anonymous>",
-                           name ? name->ns_uri() : "<>",
-                           base ? std::string(base->ns_uri()) + ":" + std::string(base->local_name()) : "<none>",
-                           derivation == Derivation::extension ? "extension" :
-                           derivation == Derivation::restriction ? "restriction" : "none");
-    }
-
-    [[nodiscard]] static ComplexParsedType from_node(const xml::node_view& complex_type, const std::string_view target_ns) {
-        ComplexParsedType type;
-
-        if (const auto name = complex_type.attribute("name"))
-            type.name = xml::qname{name->view(), target_ns};
-
-        // CHEATING EH !
-
-        return type;
+        return fmt::format("ComplexParsedType()");
     }
 };
 
@@ -196,33 +184,9 @@ public:
         return target_namespace_;
     }
 
-    [[nodiscard]] std::vector<SimpleParsedType> parse_simple() const {
-        std::vector<SimpleParsedType> types;
+    void declare_types(SchemaContext& context) const;
 
-        for (const auto simple_type : schema_.children("simpleType", ns_uri))
-            types.push_back(SimpleParsedType::from_node(simple_type, target_namespace_));
-
-        for (const auto& imported_schema : imported_schemas) {
-            const auto imported_types = imported_schema.parse_simple();
-            types.insert(types.end(), imported_types.begin(), imported_types.end());
-        }
-
-        return types;
-    }
-
-    [[nodiscard]] std::vector<ComplexParsedType> parse_complex() const {
-        std::vector<ComplexParsedType> types;
-
-        for (const auto complex_type : schema_.children("complexType", ns_uri))
-            types.push_back(ComplexParsedType::from_node(complex_type, target_namespace_));
-
-        for (const auto& imported_schema : imported_schemas) {
-            const auto imported_types = imported_schema.parse_complex();
-            types.insert(types.end(), imported_types.begin(), imported_types.end());
-        }
-
-        return types;
-    }
+    void define_types(SchemaContext& context) const;
 
 private:
     // (Construction helper) Find the target namespace of this schema, if any.
@@ -238,10 +202,19 @@ private:
         return xml::qname{ name, target_namespace_ };
     }
 
+    [[nodiscard]] bool mark_visited(SchemaContext& context) const {
+        // https://en.cppreference.com/cpp/container/unordered_set/emplace
+
+        if (document_)
+            return context.visited_documents.emplace(base_.string()).second;
+        
+        return true;
+    }
+
     // if this backs a document (i.e. no other document embeds this scheme, such as in wsdl's <types>),
     // keep it alive so that the schema node is safely alive
     // there is a recurring argument in my mind if this is actually a sign that
-    // the schema should actually be a : document; however I guess this is a reasonable compromise for now
+    // schemas should actually inherit from document; however I guess this is a reasonable compromise for now
     std::unique_ptr<xml::document> document_;
 
     xml::node_view schema_;                  // the schema node itself, which is the root of this schema
