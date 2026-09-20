@@ -135,7 +135,7 @@ private:
 
 namespace soapp::xsd {
 
-inline SimpleParsedType SimpleParsedType::from_node(const xml::node_view& simple_type, const wsdl::TypeTable& type_table) {
+inline SimpleParsedType SimpleParsedType::from_node(const xml::node_view& simple_type, wsdl::TypeTable& type_table) {
     const auto restriction = simple_type.child("restriction", ns_uri);
     const auto list = simple_type.child("list", ns_uri);
     const auto union_ = simple_type.child("union", ns_uri);
@@ -160,7 +160,7 @@ inline SimpleParsedType SimpleParsedType::from_node(const xml::node_view& simple
 
 inline SimpleParsedType SimpleParsedType::parse_restriction(
     const xml::node_view& restriction,
-    const wsdl::TypeTable& type_table) {
+    wsdl::TypeTable& type_table) {
     const auto base = restriction.attribute("base");
     const auto inline_simple_type = restriction.child("simpleType", ns_uri);
 
@@ -173,13 +173,18 @@ inline SimpleParsedType SimpleParsedType::parse_restriction(
         throw error{"Both xs:restriction/@base and xs:restriction/xs:simpleType are present; only one is allowed"};
 
     if (!base) {
-        throw error{"Inline xs:restriction/xs:simpleType is not supported yet"};
-    } else {
-        const auto base_name = restriction.resolve_qname(base->view());
-        const auto base_id = type_table.resolve(base_name);
+        auto inline_type = SimpleParsedType::from_node(*inline_simple_type, type_table);
+        const auto base_id = type_table.add_anonymous();
+
+        type_table.define(base_id, std::move(inline_type));
 
         return SimpleParsedType{ Restriction{base_id} };
     }
+
+    const auto base_name = restriction.resolve_qname(base->view());
+    const auto base_id = type_table.resolve(base_name);
+
+    return SimpleParsedType{ Restriction{base_id} };
 }
 
 inline SimpleParsedType SimpleParsedType::parse_list(const xml::node_view& list, const wsdl::TypeTable& type_table) {

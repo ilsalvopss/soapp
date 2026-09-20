@@ -71,11 +71,11 @@ private:
 public:
     [[nodiscard]] static SimpleParsedType from_node(
         const xml::node_view& simple_type,
-        const wsdl::TypeTable& type_table);
+        wsdl::TypeTable& type_table);
 
     static SimpleParsedType parse_restriction(
         const xml::node_view& restriction,
-        const wsdl::TypeTable& type_table);
+        wsdl::TypeTable& type_table);
 
     static SimpleParsedType parse_list(
         const xml::node_view& list,
