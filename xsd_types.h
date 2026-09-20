@@ -101,17 +101,89 @@ public:
     }
 };
 
+// https://www.w3.org/TR/xmlschema-1/#Complex_Type_Definitions
 class ComplexParsedType {
+public:
+    enum class Derivation {
+        none,
+        extension,
+        restriction
+    };
+
+    struct Occurs {
+        std::size_t min = 1;
+        std::optional<std::size_t> max = 1; // nullopt means unbounded
+    };
+
+    struct Element {
+        std::string name;
+        TypeRef type;
+        Occurs occurs;
+    };
+
+    struct Attribute {
+        std::string name;
+        TypeRef type;
+        bool required = false;
+    };
+
+    struct Sequence {
+        std::vector<Element> elements;
+    };
+
+    struct DirectContent {
+        std::optional<Sequence> sequence;
+        std::vector<Attribute> attributes;
+    };
+
+    struct SimpleContent {
+        TypeRef base;
+        Derivation derivation;
+        std::vector<Attribute> attributes;
+    };
+
+    struct ComplexContent {
+        TypeRef base;
+        Derivation derivation;
+        std::optional<Sequence> sequence;
+        std::vector<Attribute> attributes;
+    };
+
+    using Definition = std::variant<DirectContent, SimpleContent, ComplexContent>;
+
+private:
+    Definition definition_;
+
+    explicit ComplexParsedType(Definition definition) : definition_{std::move(definition)} {}
 
 public:
-    static ComplexParsedType from_node(
-        const xml::node_view& complex_type,
-        const std::string& target_namespace,
-        const wsdl::TypeTable& type_table) {}
+    static ComplexParsedType from_node(const xml::node_view& complex_type, wsdl::TypeTable& type_table);
 
-    [[nodiscard]] std::string print() const {
-        return fmt::format("ComplexParsedType()");
+    [[nodiscard]] const Definition& definition() const noexcept {
+        return definition_;
     }
+
+private:
+    static Occurs parse_occurs(const xml::node_view& element);
+
+    static TypeRef parse_declaration_type(
+        const xml::node_view& declaration,
+        bool allow_complex,
+        wsdl::TypeTable& type_table);
+
+    static Element parse_element(const xml::node_view& element, wsdl::TypeTable& type_table);
+
+    static Attribute parse_attribute(const xml::node_view& attribute, wsdl::TypeTable& type_table);
+
+    static std::vector<Attribute> parse_attributes(const xml::node_view& container, wsdl::TypeTable& type_table);
+
+    static Sequence parse_sequence(const xml::node_view& sequence,wsdl::TypeTable& type_table);
+
+    static ComplexParsedType parse_direct_content(const xml::node_view& complex_type, wsdl::TypeTable& type_table);
+
+    static ComplexParsedType parse_simple_content(const xml::node_view& simple_content, wsdl::TypeTable& type_table);
+
+    static ComplexParsedType parse_complex_content(const xml::node_view& complex_content, wsdl::TypeTable& type_table);
 };
 
 class XSDSchema {

@@ -10,7 +10,7 @@
 #include "xsd_types.h"
 
 #include <fmt/format.h>
-
+#include <charconv>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -56,6 +56,8 @@ public:
     TypeTable() {
         for (const auto name : xsd::builtinTypes)
             (void)add_builtin(name);
+
+        (void)declare(xml::qname{"unimplementedType", xsd::ns_uri});
     }
 
     // Reserve a named type before parsing its body.
@@ -213,6 +215,253 @@ inline SimpleParsedType SimpleParsedType::parse_union(const xml::node_view& unio
     return SimpleParsedType{Union{std::move(member_types)}};
 }
 
+inline ComplexParsedType ComplexParsedType::from_node(const xml::node_view& complex_type, wsdl::TypeTable& type_table) {
+    const auto simple_content = complex_type.child("simpleContent", ns_uri);
+    const auto complex_content = complex_type.child("complexContent", ns_uri);
+
+    if (simple_content && complex_content)
+        throw error{"xs:complexType contains both xs:simpleContent and xs:complexContent"};
+
+    if (simple_content)
+        return parse_simple_content(*simple_content, type_table);
+
+    if (complex_content)
+        return parse_complex_content(*complex_content, type_table);
+
+    return parse_direct_content(complex_type, type_table);
+}
+
+inline ComplexParsedType::Occurs ComplexParsedType::parse_occurs(const xml::node_view& element) {
+    Occurs occurs;
+
+    auto parse_non_negative = [](const xml::owned_string& value) {
+        std::size_t result = 0;
+        const auto text = value.view();
+        const auto [end, status] = std::from_chars(text.data(), text.data() + text.size(), result);
+
+        if (status != std::errc{} || end != text.data() + text.size())
+            throw error{fmt::format("Invalid non-negative value '{}'", text)};
+
+        return result;
+    };
+
+    if (const auto min = element.attribute("minOccurs"))
+        occurs.min = parse_non_negative(*min);
+
+    if (const auto max = element.attribute("maxOccurs")) {
+        if (max->view() == "unbounded")
+            occurs.max = std::nullopt;
+        else
+            occurs.max = parse_non_negative(*max);
+    }
+
+    if (occurs.max && occurs.min > *occurs.max)
+        throw error{"xs:element minOccurs greater than maxOccurs"};
+
+    return occurs;
+}
+
+inline TypeRef ComplexParsedType::parse_declaration_type(
+    const xml::node_view& declaration,
+    const bool allow_complex,
+    wsdl::TypeTable& type_table) {
+    const auto type_attr = declaration.attribute("type");
+    const auto simple_type = declaration.child("simpleType", ns_uri);
+    const auto complex_type = declaration.child("complexType", ns_uri);
+
+    const auto inline_count = static_cast<unsigned>(simple_type.has_value())
+                                    + static_cast<unsigned>(complex_type.has_value());
+
+    if (type_attr && inline_count != 0)
+        throw error{"An XSD declaration cannot have both @type and an inline type"};
+
+    if (inline_count > 1)
+        throw error{"An XSD declaration cannot contain both xs:simpleType and xs:complexType"};
+
+    if (type_attr)
+        return type_table.resolve(declaration.resolve_qname(type_attr->view()));
+
+    if (simple_type) {
+        auto definition = SimpleParsedType::from_node(*simple_type, type_table);
+        const auto id = type_table.add_anonymous();
+        type_table.define(id, std::move(definition));
+        return id;
+    }
+
+    if (complex_type) {
+        if (!allow_complex)
+            throw error{"unexpected inline xs:complexType found"};
+
+        auto definition = ComplexParsedType::from_node(*complex_type, type_table);
+        const auto id = type_table.add_anonymous();
+        type_table.define(id, std::move(definition));
+        return id;
+    }
+
+    const auto default_type = allow_complex ? "anyType" : "anySimpleType";
+    return type_table.resolve(xml::qname{ default_type, ns_uri });
+}
+
+inline ComplexParsedType::Element ComplexParsedType::parse_element(
+    const xml::node_view& element,
+    wsdl::TypeTable& type_table) {
+    const auto name = element.attribute("name");
+
+    if (!name) {
+        // TODO: handle anonymous elements properly; for now, we just return a placeholder type
+        std::cerr << "Warning: anonymous xs:element found; doing a fake parse" << std::endl;
+
+        return Element{
+            .name = std::string{"<anonymous_element>"},
+            .type = type_table.resolve(xml::qname{"unimplementedType", ns_uri}),
+            .occurs = parse_occurs(element)
+        };
+    }
+
+    return Element{
+        .name = std::string{name->view()},
+        .type = parse_declaration_type(element, true, type_table),
+        .occurs = parse_occurs(element)
+    };
+}
+
+inline ComplexParsedType::Attribute ComplexParsedType::parse_attribute(
+    const xml::node_view& attribute,
+    wsdl::TypeTable& type_table) {
+    const auto name = attribute.attribute("name");
+
+    if (!name) {
+        // TODO: handle anonymous attributes properly; for now, we just return a placeholder type
+        std::cerr << "Warning: anonymous xs:attribute found; doing a fake parse" << std::endl;
+
+        return Attribute{
+            .name = std::string{"<anonymous_attribute>"},
+            .type = type_table.resolve(xml::qname{"unimplementedType", ns_uri}),
+            .required = false
+        };
+    }
+
+    const auto use = attribute.attribute("use");
+    if (use && use->view() != "optional" && use->view() != "required" && use->view() != "prohibited")
+        throw error{fmt::format("Invalid xs:attribute @use value '{}'", use->view())};
+
+    return Attribute{
+        .name = std::string{name->view()},
+        .type = parse_declaration_type(attribute, false, type_table),
+        .required = use && use->view() == "required"
+    };
+}
+
+inline std::vector<ComplexParsedType::Attribute> ComplexParsedType::parse_attributes(
+    const xml::node_view& container,
+    wsdl::TypeTable& type_table) {
+    std::vector<Attribute> attributes;
+    for (const auto attribute : container.children("attribute", ns_uri))
+        attributes.push_back(parse_attribute(attribute, type_table));
+
+    return attributes;
+}
+
+inline ComplexParsedType::Sequence ComplexParsedType::parse_sequence(
+    const xml::node_view& sequence,
+    wsdl::TypeTable& type_table) {
+
+    // TODO: don't ignore xs:choice and xs:all? or should we throw an error? for now, let's just ignore them
+
+    Sequence result;
+    for (const auto element : sequence.children("element", ns_uri))
+        result.elements.push_back(parse_element(element, type_table));
+
+    return result;
+}
+
+inline ComplexParsedType ComplexParsedType::parse_direct_content(
+    const xml::node_view& complex_type,
+    wsdl::TypeTable& type_table) {
+    if (complex_type.child("choice", ns_uri) || complex_type.child("all", ns_uri)) {
+        std::cerr << "Warning: xs:choice and xs:all are not supported yet; doing a fake parse" << std::endl;
+
+        return ComplexParsedType { DirectContent{
+                .sequence = std::nullopt,
+                .attributes = parse_attributes(complex_type, type_table)
+            }
+        };
+    }
+
+    const auto sequences = complex_type.children("sequence", ns_uri);
+    if (sequences.size() > 1)
+        throw error{"xs:complexType contains multiple xs:sequence elements"};
+
+    std::optional<Sequence> sequence;
+    if (!sequences.empty())
+        sequence = parse_sequence(sequences.front(), type_table);
+
+    return ComplexParsedType{DirectContent{
+        .sequence = std::move(sequence),
+        .attributes = parse_attributes(complex_type, type_table)
+    }};
+}
+
+inline ComplexParsedType ComplexParsedType::parse_simple_content(
+    const xml::node_view& simple_content,
+    wsdl::TypeTable& type_table) {
+    const auto extension = simple_content.child("extension", ns_uri);
+    const auto restriction = simple_content.child("restriction", ns_uri);
+
+    if (extension && restriction)
+        throw error{"xs:simpleContent contains both xs:extension and xs:restriction"};
+
+    const auto derivation = extension ? extension : restriction;
+    if (!derivation)
+        throw error{"Missing xs:extension or xs:restriction in xs:simpleContent"};
+
+    const auto base = derivation->attribute("base");
+    if (!base)
+        throw error{"Missing required @base on xs:simpleContent derivation"};
+
+    return ComplexParsedType{SimpleContent{
+        .base = type_table.resolve(derivation->resolve_qname(base->view())),
+        .derivation = extension ? Derivation::extension : Derivation::restriction,
+        .attributes = parse_attributes(*derivation, type_table)
+    }};
+}
+
+inline ComplexParsedType ComplexParsedType::parse_complex_content(
+    const xml::node_view& complex_content,
+    wsdl::TypeTable& type_table) {
+    const auto extension = complex_content.child("extension", ns_uri);
+    const auto restriction = complex_content.child("restriction", ns_uri);
+
+    if (extension && restriction)
+        throw error{"xs:complexContent contains both xs:extension and xs:restriction"};
+
+    const auto derivation = extension ? extension : restriction;
+    if (!derivation)
+        throw error{"Missing xs:extension or xs:restriction in xs:complexContent"};
+
+    const auto base = derivation->attribute("base");
+    if (!base)
+        throw error{"Missing required @base on xs:complexContent derivation"};
+
+    if (derivation->child("choice", ns_uri) || derivation->child("all", ns_uri))
+        throw error{"xs:choice and xs:all are not supported yet"};
+
+    const auto sequences = derivation->children("sequence", ns_uri);
+    if (sequences.size() > 1)
+        throw error{"XSD derivation contains multiple xs:sequence elements"};
+
+    std::optional<Sequence> sequence;
+    if (!sequences.empty())
+        sequence = parse_sequence(sequences.front(), type_table);
+
+    return ComplexParsedType{ComplexContent {
+        .base = type_table.resolve(derivation->resolve_qname(base->view())),
+        .derivation = extension ? Derivation::extension : Derivation::restriction,
+        .sequence = std::move(sequence),
+        .attributes = parse_attributes(*derivation, type_table)
+    } };
+}
+
 inline void XSDSchema::declare_types(SchemaContext& context) const {
     if (!mark_visited(context))
         return;
@@ -265,7 +514,7 @@ inline void XSDSchema::define_types(SchemaContext& context) const {
         else
             id = context.types.add_anonymous();
 
-        context.types.define(id, ComplexParsedType::from_node(complex_type, target_namespace_, context.types));
+        context.types.define(id, ComplexParsedType::from_node(complex_type, context.types));
     }
 }
 
