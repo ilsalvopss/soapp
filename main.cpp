@@ -12,4 +12,6 @@ int main() {
     auto base = soapp::xml::uri::from_path(path);
     auto w = soapp::wsdl::WSDL11{str, std::move(base)};
 
+    w.parse_types();
+
 }

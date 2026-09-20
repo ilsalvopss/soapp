@@ -24,6 +24,7 @@ class WSDL11 : protected xml::document {
 
     TypeTable types_;
     std::vector<xsd::XSDSchema> imported_schemas; // XSD schemas imported via <import> elements
+    std::vector<xsd::XSDSchema> local_schemas;
     std::vector<WSDL11> imported_wsdl; // WSDL documents imported via <import> elements
 
     // private helper to find the definitions node in a WSDL document
@@ -55,8 +56,6 @@ public:
         // check for <import>s and handle them if necessary
         // wsdl spec is really strange here... the imported file could be another WSDL or a schema (XSD) file
         // and maybe even anything else
-
-        std::vector<xsd::XSDSchema> local_schemas;
 
         for (const auto import : definitions.children("import", ns_uri)) {
             auto location_attr = import.attribute("location");
@@ -99,7 +98,9 @@ public:
                 local_schemas.emplace_back(std::move(xsd));
             }
         }
+    }
 
+    void parse_types() {
         // declaration phase!
         xsd::SchemaContext declaration_context{types_};
 
