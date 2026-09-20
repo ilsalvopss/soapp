@@ -187,14 +187,17 @@ inline SimpleParsedType SimpleParsedType::parse_restriction(
     return SimpleParsedType{ Restriction{base_id} };
 }
 
-inline SimpleParsedType SimpleParsedType::parse_list(const xml::node_view& list, const wsdl::TypeTable& type_table) {
+inline SimpleParsedType SimpleParsedType::parse_list(const xml::node_view& list, wsdl::TypeTable& type_table) {
     TypeRef item_id;
 
     if (const auto item_type_attr = list.attribute("itemType")) {
         const auto item_name = list.resolve_qname(item_type_attr->view());
         item_id = type_table.resolve(item_name);
-    } else if (list.child("simpleType", ns_uri)) {
-        throw error{"Inline xs:list/xs:simpleType is not supported yet"};
+    } else if (const auto inline_simple_type = list.child("simpleType", ns_uri)) {
+        auto inline_type = SimpleParsedType::from_node(*inline_simple_type, type_table);
+
+        item_id = type_table.add_anonymous();
+        type_table.define(item_id, std::move(inline_type));
     } else {
         throw error{"Missing required xs:list/@itemType or xs:list/xs:simpleType"};
     }

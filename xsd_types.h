@@ -79,7 +79,7 @@ public:
 
     static SimpleParsedType parse_list(
         const xml::node_view& list,
-        const wsdl::TypeTable& type_table);
+        wsdl::TypeTable& type_table);
 
     static SimpleParsedType parse_union(
         const xml::node_view& union_,
