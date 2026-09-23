@@ -110,8 +110,10 @@ std::optional<owned_string> node_view::attribute(
 qname node_view::resolve_qname(const std::string_view value) const {
     const auto separator = value.find(':');
 
-    if (separator == std::string_view::npos)
-        return qname{value, {}};
+    if (separator == std::string_view::npos) {
+        const auto* ns = xmlSearchNs(node_->doc, const_cast<xmlNode*>(node_), nullptr);
+        return qname{value, ns ? detail::as_string_view(ns->href) : std::string_view{}};
+    }
 
     const auto prefix = value.substr(0, separator);
     const auto local_name = value.substr(separator + 1);
