@@ -65,21 +65,13 @@ private:
     explicit SimpleParsedType(Definition definition);
 
 public:
-    [[nodiscard]] static SimpleParsedType from_node(
-        const xml::node_view& simple_type,
-        wsdl::TypeTable& type_table);
+    [[nodiscard]] static SimpleParsedType from_node(const xml::node_view& simple_type, wsdl::TypeTable& type_table);
 
-    static SimpleParsedType parse_restriction(
-        const xml::node_view& restriction,
-        wsdl::TypeTable& type_table);
+    static SimpleParsedType parse_restriction(const xml::node_view& restriction, wsdl::TypeTable& type_table);
 
-    static SimpleParsedType parse_list(
-        const xml::node_view& list,
-        wsdl::TypeTable& type_table);
+    static SimpleParsedType parse_list(const xml::node_view& list, wsdl::TypeTable& type_table);
 
-    static SimpleParsedType parse_union(
-        const xml::node_view& union_,
-        const wsdl::TypeTable& type_table);
+    static SimpleParsedType parse_union(const xml::node_view& union_, const wsdl::TypeTable& type_table);
 
     [[nodiscard]] const Definition& definition() const noexcept;
 
@@ -181,7 +173,7 @@ public:
 
     explicit XSDSchema(xml::document&& doc);
 
-    explicit XSDSchema(const xml::node_view schema, xml::uri&& base);
+    explicit XSDSchema(xml::node_view schema, xml::uri&& base);
 
     [[nodiscard]] const std::string& target_namespace() const noexcept {
         return target_namespace_;
