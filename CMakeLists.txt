@@ -13,6 +13,7 @@ find_package(CURL REQUIRED)
 
 add_executable(soapp
     main.cpp
+    element_table.cpp
     io.cpp
     type_table.cpp
     wsdl.cpp

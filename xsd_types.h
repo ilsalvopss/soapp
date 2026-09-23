@@ -5,9 +5,9 @@
 #ifndef SOAPP_XSD_TYPES_H
 #define SOAPP_XSD_TYPES_H
 
+#include "type_ids.h"
 #include "xml.h"
 
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -33,13 +33,12 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-// A resolved reference into the TypeTable.
-using TypeRef = std::uint32_t;
-
 class XSDSchema;
+class ElementTable;
 
 struct SchemaContext {
     wsdl::TypeTable& types;
+    ElementTable& elements;
     std::unordered_set<std::string> visited_documents;
 };
 
@@ -90,6 +89,8 @@ public:
 // https://www.w3.org/TR/xmlschema-1/#Complex_Type_Definitions
 class ComplexParsedType {
 public:
+    friend class XSDSchema;
+
     enum class Derivation {
         none,
         extension,

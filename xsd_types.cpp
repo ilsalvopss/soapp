@@ -4,6 +4,7 @@
 
 #include "xsd_types.h"
 
+#include "element_table.h"
 #include "io.h"
 #include "type_table.h"
 
@@ -471,6 +472,14 @@ void XSDSchema::declare_types(SchemaContext& context) const {
 
         (void)context.types.declare(xml::qname{ name->view(), target_namespace_ });
     }
+
+    for (const auto element : schema_.children("element", ns_uri)) {
+        const auto name = element.attribute("name");
+        if (!name)
+            throw error{"Missing required xs:element/@name on global element"};
+
+        (void)context.elements.declare(declared_name(name->view()));
+    }
 }
 
 void XSDSchema::define_types(SchemaContext& context) const {
@@ -502,6 +511,18 @@ void XSDSchema::define_types(SchemaContext& context) const {
             id = context.types.add_anonymous();
 
         context.types.define(id, ComplexParsedType::from_node(complex_type, context.types));
+    }
+
+    for (const auto element : schema_.children("element", ns_uri)) {
+        const auto name = element.attribute("name");
+        if (!name)
+            throw error{"Missing required xs:element/@name on global element"};
+
+        const auto id = context.elements.find(declared_name(name->view()));
+        if (!id)
+            throw error{"Global xs:element was not declared"};
+
+        context.elements.define(*id, ComplexParsedType::parse_declaration_type(element, true, context.types));
     }
 }
 
