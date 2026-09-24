@@ -109,15 +109,15 @@ void WSDL11::parse_messages(CompilationContext& context) const {
     for (const auto message_node : definitions.children("message", ns_uri)) {
         const auto name = message_node.attribute("name");
         if (!name)
-            throw error{"Missing required wsdl:message/@name"};
+            throw error{ "Missing required wsdl:message/@name" };
 
         const auto message_name = declared_name(name->view());
         if (context.messages.contains(message_name))
-            throw error{
+            throw error {
                 "Duplicate wsdl:message declaration: " + std::string{message_name.local_name()}
             };
 
-        Message message{message_name, {}};
+        std::vector<Message::Part> parts;
 
         for (const auto part : message_node.children("part", ns_uri)) {
             const auto part_name = part.attribute("name");
@@ -125,31 +125,27 @@ void WSDL11::parse_messages(CompilationContext& context) const {
             const auto type = part.attribute("type");
 
             if (!part_name)
-                throw error{"Missing required wsdl:part/@name"};
+                throw error{ "Missing required wsdl:part/@name" };
 
             if (element && type || !element && !type)
-                throw error{"wsdl:part must contain exactly one of @element or @type"};
+                throw error{ "wsdl:part must contain exactly one of @element or @type" };
 
             if (element) {
                 const auto element_name = part.resolve_qname(element->view());
 
-                message.parts.push_back(MessagePart {
-                    .name = std::string{part_name->view()},
-                    .type = context.elements.resolve(element_name),
-                    .element = element_name
-                });
+                parts.emplace_back(
+                    std::string{part_name->view()},
+                    context.elements.resolve(element_name),
+                    element_name
+                );
             } else {
                 const auto type_name = part.resolve_qname(type->view());
 
-                message.parts.push_back(MessagePart {
-                    .name = std::string{part_name->view()},
-                    .type = context.types.resolve(type_name),
-                    .element = std::nullopt
-                });
+                parts.emplace_back(std::string{part_name->view()}, context.types.resolve(type_name));
             }
         }
 
-        context.messages.emplace(message_name, std::move(message));
+        context.messages.emplace(message_name, Message{ message_name, std::move(parts) });
     }
 }
 

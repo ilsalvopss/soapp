@@ -7,11 +7,11 @@
 
 #include <cstdint>
 
-namespace soapp::xsd {
+namespace soapp {
 
 // A resolved reference into the TypeTable.
 using TypeRef = std::uint32_t;
 
-}
+} // namespace soapp
 
 #endif //SOAPP_TYPE_IDS_H

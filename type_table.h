@@ -6,6 +6,7 @@
 #define SOAPP_TYPE_TABLE_H
 
 #include "builtin_types.h"
+#include "type_ids.h"
 #include "xml.h"
 #include "xsd_types.h"
 
@@ -20,8 +21,6 @@ namespace soapp::wsdl {
 
 class TypeTable {
 public:
-    using TypeId = xsd::TypeRef;
-
     using Definition = std::variant<
         std::monostate,
         xsd::BuiltinType,
@@ -31,15 +30,15 @@ public:
 
     class Type {
         std::optional<xml::qname> name_;
-        TypeId id_;
+        TypeRef id_;
         Definition definition_;
 
         friend class TypeTable;
 
     public:
-        Type(std::optional<xml::qname> name, TypeId id, Definition definition);
+        Type(std::optional<xml::qname> name, TypeRef id, Definition definition);
 
-        [[nodiscard]] TypeId id() const noexcept;
+        [[nodiscard]] TypeRef id() const noexcept;
 
         [[nodiscard]] const std::optional<xml::qname>& name() const noexcept;
 
@@ -53,28 +52,28 @@ public:
     TypeTable();
 
     // Reserve a named type before parsing its body.
-    [[nodiscard]] TypeId declare(const xml::qname& name);
+    [[nodiscard]] TypeRef declare(const xml::qname& name);
 
-    [[nodiscard]] TypeId add_anonymous();
+    [[nodiscard]] TypeRef add_anonymous();
 
-    void define(TypeId id, Definition&& definition);
+    void define(TypeRef id, Definition&& definition);
 
-    [[nodiscard]] std::optional<TypeId> find(const xml::qname& name) const noexcept;
+    [[nodiscard]] std::optional<TypeRef> find(const xml::qname& name) const noexcept;
 
-    [[nodiscard]] TypeId resolve(const xml::qname& name) const;
+    [[nodiscard]] TypeRef resolve(const xml::qname& name) const;
 
-    [[nodiscard]] const Type& get(TypeId id) const;
+    [[nodiscard]] const Type& get(TypeRef id) const;
 
     [[nodiscard]] std::size_t size() const noexcept;
 
 private:
-    [[nodiscard]] Type& get(TypeId id);
+    [[nodiscard]] Type& get(TypeRef id);
 
-    [[nodiscard]] TypeId add_builtin(std::string_view local_name);
+    [[nodiscard]] TypeRef add_builtin(std::string_view local_name);
 
-    TypeId next_id_ = 0;
+    TypeRef next_id_ = 0;
     std::vector<Type> types_;
-    std::unordered_map<xml::qname, TypeId, xml::qname::hash> names_;
+    std::unordered_map<xml::qname, TypeRef, xml::qname::hash> names_;
 };
 
 }
