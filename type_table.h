@@ -10,8 +10,8 @@
 #include "xml.h"
 #include "xsd_types.h"
 
+#include <functional>
 #include <optional>
-#include <stdexcept>
 #include <string_view>
 #include <unordered_map>
 #include <variant>
@@ -65,6 +65,8 @@ public:
     [[nodiscard]] const Type& get(TypeRef id) const;
 
     [[nodiscard]] std::size_t size() const noexcept;
+
+    void for_each(const std::function<void(const Type&)>& callback) const;
 
 private:
     [[nodiscard]] Type& get(TypeRef id);

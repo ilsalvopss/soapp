@@ -75,6 +75,11 @@ std::optional<TypeRef> TypeTable::find(const xml::qname& name) const noexcept {
     return std::nullopt;
 }
 
+void TypeTable::for_each(const std::function<void(const Type&)>& callback) const {
+    for (const auto& type : types_)
+        callback(type);
+}
+
 TypeRef TypeTable::resolve(const xml::qname& name) const {
     if (const auto id = find(name))
         return *id;
