@@ -71,7 +71,7 @@ public:
 
     static SimpleParsedType parse_list(const xml::node_view& list, wsdl::TypeTable& type_table);
 
-    static SimpleParsedType parse_union(const xml::node_view& union_, const wsdl::TypeTable& type_table);
+    static SimpleParsedType parse_union(const xml::node_view& union_, wsdl::TypeTable& type_table);
 
     [[nodiscard]] const Definition& definition() const noexcept;
 

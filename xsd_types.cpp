@@ -184,10 +184,37 @@ SimpleParsedType SimpleParsedType::parse_list(const xml::node_view& list, wsdl::
     return SimpleParsedType{ List{ item_id } };
 }
 
-SimpleParsedType SimpleParsedType::parse_union(const xml::node_view& union_, const wsdl::TypeTable& type_table) {
+SimpleParsedType SimpleParsedType::parse_union(const xml::node_view& union_, wsdl::TypeTable& type_table) {
     std::vector<TypeRef> member_types;
 
-    std::cerr << "Warning: xs:union is not supported yet; doing a fake parse" << std::endl;
+    if (const auto member_types_attr = union_.attribute("memberTypes")) {
+        constexpr std::string_view whitespace = " \t\r\n";
+        auto names = member_types_attr->view();
+
+        for (auto start = names.find_first_not_of(whitespace); start != std::string_view::npos;
+             start = names.find_first_not_of(whitespace)) {
+            names.remove_prefix(start);
+            const auto end = names.find_first_of(whitespace);
+            const auto member_name = union_.resolve_qname(names.substr(0, end));
+            member_types.push_back(type_table.resolve(member_name));
+            if (end == std::string_view::npos)
+                break;
+            names.remove_prefix(end);
+        }
+    }
+
+    // Explicit references precede inline definitions; keep both as TypeRefs for now.
+    for (const auto simple_type : union_.children("simpleType", ns_uri)) {
+        auto inline_type = from_node(simple_type, type_table);
+        const auto member_id = type_table.add_anonymous();
+        type_table.define(member_id, std::move(inline_type));
+        member_types.push_back(member_id);
+    }
+
+    if (member_types.empty())
+        throw error{ "xs:union must contain at least one member type" };
+
+    // TODO: this is still incomplete, clearly
 
     return SimpleParsedType{ Union{ std::move(member_types) } };
 }
