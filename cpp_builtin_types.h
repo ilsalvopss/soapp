@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <string>
+#include <variant>
+#include <vector>
 
 namespace soapp::builtin_types {
 
@@ -74,6 +76,16 @@ struct NonPositiveInteger : Unimplemented {};
 struct NegativeInteger : Unimplemented {};
 struct NonNegativeInteger : Unimplemented {};
 struct PositiveInteger : Unimplemented {};
+
+template<typename T>
+struct SimpleList : Type<std::vector<T>> {};
+
+template<typename T, typename... Ts>
+struct SimpleUnion : Type<std::variant<T, Ts...>> {};
+
+// A singleton keeps its member's storage and API without a variant layer.
+template<typename T>
+struct SimpleUnion<T> : T {};
 
 } // namespace soapp::builtin_types
 

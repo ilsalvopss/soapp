@@ -1,6 +1,8 @@
 #include <filesystem>
 #include <fstream>
 #include "wsdl.h"
+#include <iostream>
+#include "cpp_generator.h"
 
 int main() {
     const auto path = std::filesystem::absolute("../tests/devicemgmt.wsdl");
@@ -15,4 +17,6 @@ int main() {
 
     w.parse_types(context);
 
+    const soapp::cpp::Names names{ context.types };
+    soapp::cpp::write_header(context.types, names, std::cout);
 }
