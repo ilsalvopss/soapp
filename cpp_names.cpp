@@ -76,6 +76,29 @@ namespace {
     }
 }
 
+[[nodiscard]] std::vector<std::string> assign_local_names(const std::vector<std::string>& bases,
+                                                          std::unordered_set<std::string> used) {
+    std::unordered_map<std::string, std::size_t> counts;
+    std::vector<std::string> names(bases.size());
+
+    for (const auto& base : bases) {
+        if (!base.empty())
+            ++counts[base];
+    }
+
+    for (std::size_t i = 0; i < bases.size(); ++i) {
+        if (!bases[i].empty() && counts[bases[i]] == 1 && used.emplace(bases[i]).second)
+            names[i] = bases[i];
+    }
+
+    for (std::size_t i = 0; i < bases.size(); ++i) {
+        if (!bases[i].empty() && names[i].empty())
+            names[i] = claim(bases[i], used);
+    }
+
+    return names;
+}
+
 void append_parts(std::vector<std::string>& parts, std::string_view value, const std::string_view separators) {
     while (!value.empty()) {
         const auto end = value.find_first_of(separators);
@@ -206,6 +229,7 @@ Names::Names(const wsdl::TypeTable& types, const std::span<const std::string_vie
 
     assign_scopes(types);
     assign_type_names(types);
+    assign_member_names(types);
 }
 
 void Names::assign_scopes(const wsdl::TypeTable& types) {
@@ -275,6 +299,41 @@ void Names::assign_type_names(const wsdl::TypeTable& types) {
     });
 }
 
+void Names::assign_member_names(const wsdl::TypeTable& types) {
+    types.for_each([&](const auto& type) {
+        const auto* complex = std::get_if<xsd::ComplexParsedType>(&type.definition());
+        if (!complex)
+            return;
+
+        const auto* content = std::get_if<xsd::ComplexParsedType::DirectContent>(&complex->definition());
+        if (!content)
+            return; // TODO: Member emission for derived complex types
+
+        const auto element_count = content->sequence ? content->sequence->elements.size() : 0;
+        std::vector<std::string> bases(element_count + content->attributes.size());
+
+        for (std::size_t i = 0; i < element_count; ++i) {
+            const auto& element = content->sequence->elements[i];
+            if (element.occurs.max != 0)
+                bases[i] = identifier(element.name);
+        }
+
+        for (std::size_t i = 0; i < content->attributes.size(); ++i) {
+            if (content->attributes[i].prohibited)
+                continue;
+
+            bases[element_count + i] = identifier(content->attributes[i].name);
+        }
+
+        auto& named = types_[type.id()];
+
+        const auto members = assign_local_names(bases, { named.local });
+
+        named.elements.assign(members.begin(), members.begin() + element_count);
+        named.attributes.assign(members.begin() + element_count, members.end());
+    });
+}
+
 std::string_view Names::namespace_name(const std::string_view uri) const {
     const auto entry = namespaces_.find(uri);
     if (entry == namespaces_.end())
@@ -297,6 +356,14 @@ std::string_view Names::type_namespace(const TypeRef id) const {
 
 std::string Names::qualified_type(const TypeRef id) const {
     return std::string{ type_namespace(id) } + "::" + std::string{ type(id) };
+}
+
+std::string_view Names::element(const TypeRef owner, const std::size_t index) const {
+    return types_.at(owner).elements.at(index);
+}
+
+std::string_view Names::attribute(const TypeRef owner, const std::size_t index) const {
+    return types_.at(owner).attributes.at(index);
 }
 
 } // namespace soapp::cpp

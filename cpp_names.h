@@ -7,6 +7,7 @@
 
 #include "type_ids.h"
 
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <span>
@@ -32,12 +33,18 @@ public:
     [[nodiscard]] std::string_view type_namespace(TypeRef id) const;
     [[nodiscard]] std::string qualified_type(TypeRef id) const;
 
+    // Indices match the IR's sequence and attribute vectors; omitted fields have empty names.
+    [[nodiscard]] std::string_view element(TypeRef owner, std::size_t index) const;
+    [[nodiscard]] std::string_view attribute(TypeRef owner, std::size_t index) const;
+
 private:
     using NamespaceNames = std::map<std::string, std::string, std::less<>>;
 
     struct TypeName {
         std::string scope; // namespace name, e.g. "soapp::xsd"
         std::string local; // local name, e.g. "String"
+        std::vector<std::string> elements;
+        std::vector<std::string> attributes;
     };
 
     NamespaceNames namespaces_;     // maps namespace URI to C++ namespace name
@@ -48,6 +55,7 @@ private:
 
     void assign_scopes(const wsdl::TypeTable& types);
     void assign_type_names(const wsdl::TypeTable& types);
+    void assign_member_names(const wsdl::TypeTable& types);
 };
 
 } // namespace soapp::cpp
