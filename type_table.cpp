@@ -38,8 +38,6 @@ bool TypeTable::Type::defined() const noexcept {
 TypeTable::TypeTable() {
     for (const auto& name: xsd::builtin_types | std::views::keys)
         (void)add_builtin(name);
-
-    (void)declare(xml::qname{"unimplementedType", xsd::ns_uri});
 }
 
 TypeRef TypeTable::declare(const xml::qname& name) {

@@ -53,6 +53,7 @@ using BuiltinEntry = std::pair<std::string_view, BuiltinType::Kind>;
 // so for now the unsupported ones are still represented as builtins with the
 // Unimplemented kind.
 inline constexpr auto builtin_types = std::to_array<BuiltinEntry>({
+    {"unimplemented", BuiltinType::Kind::Unimplemented},
     {"anyType", BuiltinType::Kind::AnyType},
     {"anySimpleType", BuiltinType::Kind::AnySimpleType},
     {"string", BuiltinType::Kind::String},

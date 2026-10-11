@@ -316,7 +316,7 @@ ComplexParsedType::Element ComplexParsedType::parse_element(const xml::node_view
 
         return Element {
             .name = std::string{"<anonymous_element>"},
-            .type = type_table.resolve(xml::qname{"unimplementedType", ns_uri}),
+            .type = type_table.resolve(xml::qname{ "unimplemented", ns_uri }),
             .occurs = parse_occurs(element)
         };
     }
@@ -332,6 +332,9 @@ ComplexParsedType::Attribute ComplexParsedType::parse_attribute(
     const xml::node_view& attribute,
     wsdl::TypeTable& type_table) {
     const auto name = attribute.attribute("name");
+    const auto use = attribute.attribute("use");
+    if (use && use->view() != "optional" && use->view() != "required" && use->view() != "prohibited")
+        throw error{fmt::format("Invalid xs:attribute @use value '{}'", use->view())};
 
     if (!name) {
         // TODO: handle anonymous attributes properly; for now, we just return a placeholder type
@@ -339,19 +342,17 @@ ComplexParsedType::Attribute ComplexParsedType::parse_attribute(
 
         return Attribute {
             .name = std::string{"<anonymous_attribute>"},
-            .type = type_table.resolve(xml::qname{"unimplementedType", ns_uri}),
-            .required = false
+            .type = type_table.resolve(xml::qname{"unimplemented", ns_uri}),
+            .required = use && use->view() == "required",
+            .prohibited = use && use->view() == "prohibited"
         };
     }
-
-    const auto use = attribute.attribute("use");
-    if (use && use->view() != "optional" && use->view() != "required" && use->view() != "prohibited")
-        throw error{fmt::format("Invalid xs:attribute @use value '{}'", use->view())};
 
     return Attribute {
         .name = std::string{name->view()},
         .type = parse_declaration_type(attribute, false, type_table),
-        .required = use && use->view() == "required"
+        .required = use && use->view() == "required",
+        .prohibited = use && use->view() == "prohibited"
     };
 }
 

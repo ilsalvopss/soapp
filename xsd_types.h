@@ -104,6 +104,7 @@ public:
         std::string name;
         TypeRef type;
         bool required = false;
+        bool prohibited = false;
     };
 
     struct Sequence {

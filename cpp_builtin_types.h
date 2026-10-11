@@ -71,11 +71,23 @@ struct GMonth : Unimplemented {};
 struct AnyURI : Unimplemented {};
 struct QName : Unimplemented {};
 struct NOTATION : Unimplemented {};
-struct Integer : Unimplemented {};
-struct NonPositiveInteger : Unimplemented {};
-struct NegativeInteger : Unimplemented {};
-struct NonNegativeInteger : Unimplemented {};
-struct PositiveInteger : Unimplemented {};
+
+struct Integer : Type<std::string> {
+    // TODO: implement arbitrary-precision integer operations?
+    // TODO: implement parsing and validation of integer strings?
+};
+struct NonPositiveInteger : Integer {
+    // TODO: implement validation to ensure the integer is non-positive
+};
+struct NegativeInteger : Integer {
+    // TODO: implement validation to ensure the integer is negative
+};
+struct NonNegativeInteger : Integer {
+    // TODO: implement validation to ensure the integer is non-negative
+};
+struct PositiveInteger : Integer {
+    // TODO: implement validation to ensure the integer is positive
+};
 
 template<typename T>
 struct SimpleList : Type<std::vector<T>> {};
