@@ -8,11 +8,14 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <map>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 
 namespace soapp::cpp {
@@ -300,38 +303,92 @@ void Names::assign_type_names(const wsdl::TypeTable& types) {
 }
 
 void Names::assign_member_names(const wsdl::TypeTable& types) {
-    types.for_each([&](const auto& type) {
-        const auto* complex = std::get_if<xsd::ComplexParsedType>(&type.definition());
-        if (!complex)
+    enum class State { unseen, visiting, visited };
+
+    std::vector<State> states(types.size(), State::unseen);
+    std::vector<std::unordered_set<std::string>> inherited_names(types.size());
+
+    std::function<void(TypeRef)> assign = [&](const TypeRef id) {
+        auto& state = states.at(id);
+        if (state == State::visited)
             return;
+        if (state == State::visiting)
+            throw std::runtime_error{ "Cyclic complex inheritance at type " + std::to_string(id)};
 
-        const auto* content = std::get_if<xsd::ComplexParsedType::DirectContent>(&complex->definition());
-        if (!content)
-            return; // TODO: Member emission for derived complex types
+        state = State::visiting;
 
-        const auto element_count = content->sequence ? content->sequence->elements.size() : 0;
-        std::vector<std::string> bases(element_count + content->attributes.size());
+        const auto* complex = std::get_if<xsd::ComplexParsedType>(&types.get(id).definition());
+        if (!complex) {
+            state = State::visited;
+            return;
+        }
+
+        std::optional<TypeRef> base;
+        const xsd::ComplexParsedType::Sequence* sequence = nullptr;
+        std::span<const xsd::ComplexParsedType::Attribute> attributes;
+        bool supported = false;
+
+        if (const auto* content = std::get_if<xsd::ComplexParsedType::DirectContent>(&complex->definition())) {
+            sequence = content->sequence ? &*content->sequence : nullptr;
+            attributes = content->attributes;
+            supported = true;
+        } else if (const auto* content = std::get_if<xsd::ComplexParsedType::SimpleContent>(&complex->definition())) {
+            base = content->base;
+            if (content->derivation == xsd::ComplexParsedType::Derivation::extension) {
+                attributes = content->attributes;
+                supported = true;
+            }
+        } else if (const auto* content = std::get_if<xsd::ComplexParsedType::ComplexContent>(&complex->definition())) {
+            base = content->base;
+            if (content->derivation == xsd::ComplexParsedType::Derivation::extension) {
+                sequence = content->sequence ? &*content->sequence : nullptr;
+                attributes = content->attributes;
+                supported = true;
+            }
+        }
+
+        if (base)
+            assign(*base);
+
+        if (!supported) {
+            state = State::visited;
+            return; // Placeholders have no emitted members, but their base chain must still be acyclic.
+        }
+
+        auto& assigned_in_scope = inherited_names[id];
+        if (base)
+            assigned_in_scope = inherited_names[*base];
+
+        const auto element_count = sequence ? sequence->elements.size() : 0;
+        std::vector<std::string> bases(element_count + attributes.size());
 
         for (std::size_t i = 0; i < element_count; ++i) {
-            const auto& element = content->sequence->elements[i];
+            const auto& element = sequence->elements[i];
             if (element.occurs.max != 0)
                 bases[i] = identifier(element.name);
         }
 
-        for (std::size_t i = 0; i < content->attributes.size(); ++i) {
-            if (content->attributes[i].prohibited)
+        for (std::size_t i = 0; i < attributes.size(); ++i) {
+            if (attributes[i].prohibited)
                 continue;
-
-            bases[element_count + i] = identifier(content->attributes[i].name);
+            bases[element_count + i] = identifier(attributes[i].name);
         }
 
-        auto& named = types_[type.id()];
-
-        const auto members = assign_local_names(bases, { named.local });
+        auto& named = types_[id];
+        auto used = assigned_in_scope;
+        used.emplace(named.local); // Reserve this class's constructor name in its own scope.
+        const auto members = assign_local_names(bases, std::move(used));
 
         named.elements.assign(members.begin(), members.begin() + element_count);
         named.attributes.assign(members.begin() + element_count, members.end());
-    });
+        for (const auto& member : members)
+            if (!member.empty())
+                assigned_in_scope.emplace(member);
+
+        state = State::visited;
+    };
+
+    types.for_each([&](const auto& type) { assign(type.id()); });
 }
 
 std::string_view Names::namespace_name(const std::string_view uri) const {
