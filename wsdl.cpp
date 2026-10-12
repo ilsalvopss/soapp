@@ -91,6 +91,17 @@ void WSDL11::declare_schemas(xsd::SchemaContext& context) const {
         schema.declare_types(context);
 }
 
+void WSDL11::bind_schema_elements(xsd::SchemaContext& context) const {
+    for (const auto& wsdl : imported_wsdl)
+        wsdl.bind_schema_elements(context);
+
+    for (const auto& schema : imported_schemas)
+        schema.bind_elements(context);
+
+    for (const auto& schema : local_schemas)
+        schema.bind_elements(context);
+}
+
 void WSDL11::define_schemas(xsd::SchemaContext& context) const {
     for (const auto& wsdl : imported_wsdl)
         wsdl.define_schemas(context);
@@ -151,12 +162,15 @@ void WSDL11::parse_messages(CompilationContext& context) const {
 
 void WSDL11::parse_types(CompilationContext& context) const {
     // declaration phase!
-    xsd::SchemaContext declaration_context{context.types, context.elements};
+    xsd::SchemaContext declaration_context{ context.types, context.elements };
     declare_schemas(declaration_context);
 
     std::cout << "Declared " << context.types.size() << " types" << std::endl;
 
-    xsd::SchemaContext definition_context{context.types, context.elements};
+    xsd::SchemaContext binding_context{ context.types, context.elements };
+    bind_schema_elements(binding_context);
+
+    xsd::SchemaContext definition_context{ context.types, context.elements };
     define_schemas(definition_context);
 
     std::cout << "Defined " << context.types.size() << " types" << std::endl;

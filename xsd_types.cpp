@@ -137,7 +137,7 @@ SimpleParsedType SimpleParsedType::from_node(const xml::node_view& simple_type, 
     if (union_)
         return parse_union(*union_, type_table);
 
-    throw error{"Unsupported xs:simpleType variety"};
+    throw error{ "Unsupported xs:simpleType variety" };
 }
 
 SimpleParsedType SimpleParsedType::parse_restriction(const xml::node_view& restriction, wsdl::TypeTable& type_table) {
@@ -178,7 +178,7 @@ SimpleParsedType SimpleParsedType::parse_list(const xml::node_view& list, wsdl::
         item_id = type_table.add_anonymous();
         type_table.define(item_id, std::move(inline_type));
     } else {
-        throw error{"Missing required xs:list/@itemType or xs:list/xs:simpleType"};
+        throw error{ "Missing required xs:list/@itemType or xs:list/xs:simpleType" };
     }
 
     return SimpleParsedType{ List{ item_id } };
@@ -219,7 +219,7 @@ SimpleParsedType SimpleParsedType::parse_union(const xml::node_view& union_, wsd
     return SimpleParsedType{ Union{ std::move(member_types) } };
 }
 
-ComplexParsedType ComplexParsedType::from_node(const xml::node_view& complex_type, wsdl::TypeTable& type_table) {
+ComplexParsedType ComplexParsedType::from_node(const xml::node_view& complex_type, SchemaContext& context) {
     const auto simple_content = complex_type.child("simpleContent", ns_uri);
     const auto complex_content = complex_type.child("complexContent", ns_uri);
 
@@ -227,12 +227,12 @@ ComplexParsedType ComplexParsedType::from_node(const xml::node_view& complex_typ
         throw error{ "xs:complexType contains both xs:simpleContent and xs:complexContent" };
 
     if (simple_content)
-        return parse_simple_content(*simple_content, type_table);
+        return parse_simple_content(*simple_content, context);
 
     if (complex_content)
-        return parse_complex_content(*complex_content, type_table);
+        return parse_complex_content(*complex_content, context);
 
-    return parse_direct_content(complex_type, type_table);
+    return parse_direct_content(complex_type, context);
 }
 
 ComplexParsedType::Occurs ComplexParsedType::parse_occurs(const xml::node_view& element) {
@@ -266,10 +266,9 @@ ComplexParsedType::Occurs ComplexParsedType::parse_occurs(const xml::node_view& 
     return occurs;
 }
 
-TypeRef ComplexParsedType::parse_declaration_type(
-    const xml::node_view& declaration,
-    const bool allow_complex,
-    wsdl::TypeTable& type_table) {
+TypeRef ComplexParsedType::declaration_type(const xml::node_view& declaration,
+                                            const bool allow_complex,
+                                            wsdl::TypeTable& type_table) {
     const auto type_attr = declaration.attribute("type");
     const auto simple_type = declaration.child("simpleType", ns_uri);
     const auto complex_type = declaration.child("complexType", ns_uri);
@@ -283,130 +282,134 @@ TypeRef ComplexParsedType::parse_declaration_type(
     if (inline_count > 1)
         throw error{ "An XSD declaration cannot contain both xs:simpleType and xs:complexType" };
 
+    if (complex_type && !allow_complex)
+        throw error{ "Unexpected inline xs:complexType found" };
+
     if (type_attr)
         return type_table.resolve(declaration.resolve_qname(type_attr->view()));
 
-    if (simple_type) {
-        auto definition = SimpleParsedType::from_node(*simple_type, type_table);
-        const auto id = type_table.add_anonymous();
-        type_table.define(id, std::move(definition));
-        return id;
-    }
-
-    if (complex_type) {
-        if (!allow_complex)
-            throw error{ "Unexpected inline xs:complexType found" };
-
-        auto definition = from_node(*complex_type, type_table);
-        const auto id = type_table.add_anonymous();
-        type_table.define(id, std::move(definition));
-        return id;
-    }
+    if (inline_count != 0)
+        return type_table.add_anonymous();
 
     const auto default_type = allow_complex ? "anyType" : "anySimpleType";
     return type_table.resolve(xml::qname{ default_type, ns_uri });
 }
 
-ComplexParsedType::Element ComplexParsedType::parse_element(const xml::node_view& element, wsdl::TypeTable& type_table) {
+void ComplexParsedType::define_inline_type(const xml::node_view& declaration, const TypeRef id, SchemaContext& context) {
+    if (const auto simple_type = declaration.child("simpleType", ns_uri))
+        context.types.define(id, SimpleParsedType::from_node(*simple_type, context.types));
+    else if (const auto complex_type = declaration.child("complexType", ns_uri))
+        context.types.define(id, from_node(*complex_type, context));
+}
+
+TypeRef ComplexParsedType::parse_declaration_type(const xml::node_view& declaration,
+                                                  const bool allow_complex,
+                                                  SchemaContext& context) {
+    const auto id = declaration_type(declaration, allow_complex, context.types);
+    define_inline_type(declaration, id, context);
+    return id;
+}
+
+ComplexParsedType::Element ComplexParsedType::parse_element(const xml::node_view& element, SchemaContext& context) {
     const auto name = element.attribute("name");
+    const auto ref = element.attribute("ref");
 
-    if (!name) {
-        // TODO: handle anonymous elements properly; for now, we just return a placeholder type
-        std::cerr << "Warning: anonymous xs:element found; doing a fake parse" << std::endl;
+    if (name.has_value() == ref.has_value())
+        throw error{ "xs:element must contain exactly one of @name or @ref" };
 
+    if (ref) {
+        if (element.attribute("type") ||
+            element.child("simpleType", ns_uri) ||
+            element.child("complexType", ns_uri))
+            throw error{ "xs:element/@ref cannot have @type or an inline type" };
+
+        const auto referenced_name = element.resolve_qname(ref->view());
         return Element {
-            .name = std::string{"<anonymous_element>"},
-            .type = type_table.resolve(xml::qname{ "unimplemented", ns_uri }),
+            .name = std::string{ referenced_name.local_name() },
+            .type = context.elements.resolve(referenced_name),
             .occurs = parse_occurs(element)
         };
     }
 
     return Element {
-        .name = std::string{name->view()},
-        .type = parse_declaration_type(element, true, type_table),
+        .name = std::string{ name->view() },
+        .type = parse_declaration_type(element, true, context),
         .occurs = parse_occurs(element)
     };
 }
 
-ComplexParsedType::Attribute ComplexParsedType::parse_attribute(
-    const xml::node_view& attribute,
-    wsdl::TypeTable& type_table) {
+ComplexParsedType::Attribute ComplexParsedType::parse_attribute(const xml::node_view& attribute,
+                                                                SchemaContext& context) {
     const auto name = attribute.attribute("name");
     const auto use = attribute.attribute("use");
+
     if (use && use->view() != "optional" && use->view() != "required" && use->view() != "prohibited")
-        throw error{fmt::format("Invalid xs:attribute @use value '{}'", use->view())};
+        throw error{ fmt::format("Invalid xs:attribute @use value '{}'", use->view()) };
 
     if (!name) {
         // TODO: handle anonymous attributes properly; for now, we just return a placeholder type
         std::cerr << "Warning: anonymous xs:attribute found; doing a fake parse" << std::endl;
 
         return Attribute {
-            .name = std::string{"<anonymous_attribute>"},
-            .type = type_table.resolve(xml::qname{"unimplemented", ns_uri}),
+            .name = std::string{ "__anonymous_attribute" },
+            .type = parse_declaration_type(attribute, false, context),
             .required = use && use->view() == "required",
             .prohibited = use && use->view() == "prohibited"
         };
     }
 
     return Attribute {
-        .name = std::string{name->view()},
-        .type = parse_declaration_type(attribute, false, type_table),
+        .name = std::string{ name->view() },
+        .type = parse_declaration_type(attribute, false, context),
         .required = use && use->view() == "required",
         .prohibited = use && use->view() == "prohibited"
     };
 }
 
-std::vector<ComplexParsedType::Attribute> ComplexParsedType::parse_attributes(
-    const xml::node_view& container,
-    wsdl::TypeTable& type_table) {
+std::vector<ComplexParsedType::Attribute> ComplexParsedType::parse_attributes(const xml::node_view& container,
+                                                                              SchemaContext& context) {
     std::vector<Attribute> attributes;
     for (const auto attribute : container.children("attribute", ns_uri))
-        attributes.push_back(parse_attribute(attribute, type_table));
+        attributes.push_back(parse_attribute(attribute, context));
 
     return attributes;
 }
 
-ComplexParsedType::Sequence ComplexParsedType::parse_sequence(
-    const xml::node_view& sequence,
-    wsdl::TypeTable& type_table) {
-
+ComplexParsedType::Sequence ComplexParsedType::parse_sequence(const xml::node_view& sequence, SchemaContext& context) {
     Sequence result;
+
     for (const auto element : sequence.children("element", ns_uri))
-        result.elements.push_back(parse_element(element, type_table));
+        result.elements.push_back(parse_element(element, context));
 
     return result;
 }
 
-ComplexParsedType ComplexParsedType::parse_direct_content(
-    const xml::node_view& complex_type,
-    wsdl::TypeTable& type_table) {
+ComplexParsedType ComplexParsedType::parse_direct_content(const xml::node_view& complex_type, SchemaContext& context) {
     if (complex_type.child("choice", ns_uri) || complex_type.child("all", ns_uri)) {
         std::cerr << "Warning: xs:choice and xs:all are not supported yet; doing a fake parse" << std::endl;
 
         return ComplexParsedType { DirectContent {
                 .sequence = std::nullopt,
-                .attributes = parse_attributes(complex_type, type_table)
+                .attributes = parse_attributes(complex_type, context)
             }
         };
     }
 
     const auto sequences = complex_type.children("sequence", ns_uri);
     if (sequences.size() > 1)
-        throw error{"xs:complexType contains multiple xs:sequence elements"};
+        throw error{ "xs:complexType contains multiple xs:sequence elements" };
 
     std::optional<Sequence> sequence;
     if (!sequences.empty())
-        sequence = parse_sequence(sequences.front(), type_table);
+        sequence = parse_sequence(sequences.front(), context);
 
     return ComplexParsedType{ DirectContent {
         .sequence = std::move(sequence),
-        .attributes = parse_attributes(complex_type, type_table)
+        .attributes = parse_attributes(complex_type, context)
     }};
 }
 
-ComplexParsedType ComplexParsedType::parse_simple_content(
-    const xml::node_view& simple_content,
-    wsdl::TypeTable& type_table) {
+ComplexParsedType ComplexParsedType::parse_simple_content(const xml::node_view& simple_content, SchemaContext& context) {
     const auto extension = simple_content.child("extension", ns_uri);
     const auto restriction = simple_content.child("restriction", ns_uri);
 
@@ -419,18 +422,16 @@ ComplexParsedType ComplexParsedType::parse_simple_content(
 
     const auto base = derivation->attribute("base");
     if (!base)
-        throw error{"Missing required @base on xs:simpleContent derivation"};
+        throw error{ "Missing required @base on xs:simpleContent derivation" };
 
     return ComplexParsedType{ SimpleContent {
-        .base = type_table.resolve(derivation->resolve_qname(base->view())),
+        .base = context.types.resolve(derivation->resolve_qname(base->view())),
         .derivation = extension ? Derivation::extension : Derivation::restriction,
-        .attributes = parse_attributes(*derivation, type_table)
+        .attributes = parse_attributes(*derivation, context)
     }};
 }
 
-ComplexParsedType ComplexParsedType::parse_complex_content(
-    const xml::node_view& complex_content,
-    wsdl::TypeTable& type_table) {
+ComplexParsedType ComplexParsedType::parse_complex_content(const xml::node_view& complex_content, SchemaContext& context) {
     const auto extension = complex_content.child("extension", ns_uri);
     const auto restriction = complex_content.child("restriction", ns_uri);
 
@@ -445,6 +446,7 @@ ComplexParsedType ComplexParsedType::parse_complex_content(
     if (!base)
         throw error{ "Missing required @base on xs:complexContent derivation" };
 
+    //TODO: implement xs:choice and xs:all parsing
     if (derivation->child("choice", ns_uri) || derivation->child("all", ns_uri))
         throw error{ "xs:choice and xs:all are not supported yet :(" };
 
@@ -454,13 +456,13 @@ ComplexParsedType ComplexParsedType::parse_complex_content(
 
     std::optional<Sequence> sequence;
     if (!sequences.empty())
-        sequence = parse_sequence(sequences.front(), type_table);
+        sequence = parse_sequence(sequences.front(), context);
 
     return ComplexParsedType{ ComplexContent {
-        .base = type_table.resolve(derivation->resolve_qname(base->view())),
+        .base = context.types.resolve(derivation->resolve_qname(base->view())),
         .derivation = extension ? Derivation::extension : Derivation::restriction,
         .sequence = std::move(sequence),
-        .attributes = parse_attributes(*derivation, type_table)
+        .attributes = parse_attributes(*derivation, context)
     } };
 }
 
@@ -476,7 +478,7 @@ void XSDSchema::declare_types(SchemaContext& context) const {
         if (!name)
             continue;
 
-        (void)context.types.declare(xml::qname{ name->view(), target_namespace_ });
+        (void)context.types.declare(declared_name(name->view()));
     }
 
     for (const auto complex_type : schema_.children("complexType", ns_uri)) {
@@ -484,7 +486,7 @@ void XSDSchema::declare_types(SchemaContext& context) const {
         if (!name)
             continue;
 
-        (void)context.types.declare(xml::qname{ name->view(), target_namespace_ });
+        (void)context.types.declare(declared_name(name->view()));
     }
 
     for (const auto element : schema_.children("element", ns_uri)) {
@@ -492,7 +494,31 @@ void XSDSchema::declare_types(SchemaContext& context) const {
         if (!name)
             throw error{ "Missing required xs:element/@name on global element" };
 
+        if (element.attribute("ref"))
+            throw error{ "Unexpected @ref on global xs:element" };
+
         (void)context.elements.declare(declared_name(name->view()));
+    }
+}
+
+void XSDSchema::bind_elements(SchemaContext& context) const {
+    if (!mark_visited(context))
+        return;
+
+    for (const auto& imported_schema : imported_schemas)
+        imported_schema.bind_elements(context);
+
+    for (const auto element : schema_.children("element", ns_uri)) {
+        const auto name = element.attribute("name");
+        if (!name)
+            throw error{ "Missing required xs:element/@name on global element" };
+
+        const auto id = context.elements.find(declared_name(name->view()));
+        if (!id)
+            throw error{ "Global xs:element was not declared" };
+
+
+        context.elements.define(*id, ComplexParsedType::declaration_type(element, true, context.types));
     }
 }
 
@@ -508,7 +534,7 @@ void XSDSchema::define_types(SchemaContext& context) const {
         TypeRef id;
 
         if (name)
-            id = context.types.resolve(xml::qname{ name->view(), target_namespace_ });
+            id = context.types.resolve(declared_name(name->view()));
         else
             id = context.types.add_anonymous();
 
@@ -520,11 +546,11 @@ void XSDSchema::define_types(SchemaContext& context) const {
         TypeRef id;
 
         if (name)
-            id = context.types.resolve(xml::qname{ name->view(), target_namespace_ });
+            id = context.types.resolve(declared_name(name->view()));
         else
             id = context.types.add_anonymous();
 
-        context.types.define(id, ComplexParsedType::from_node(complex_type, context.types));
+        context.types.define(id, ComplexParsedType::from_node(complex_type, context));
     }
 
     for (const auto element : schema_.children("element", ns_uri)) {
@@ -532,11 +558,8 @@ void XSDSchema::define_types(SchemaContext& context) const {
         if (!name)
             throw error{ "Missing required xs:element/@name on global element" };
 
-        const auto id = context.elements.find(declared_name(name->view()));
-        if (!id)
-            throw error{ "Global xs:element was not declared" };
-
-        context.elements.define(*id, ComplexParsedType::parse_declaration_type(element, true, context.types));
+        const auto id = context.elements.resolve(declared_name(name->view()));
+        ComplexParsedType::define_inline_type(element, id, context);
     }
 }
 

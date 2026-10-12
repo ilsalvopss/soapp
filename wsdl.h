@@ -42,6 +42,8 @@ class WSDL11 : protected xml::document {
 
     void declare_schemas(xsd::SchemaContext& context) const;
 
+    void bind_schema_elements(xsd::SchemaContext& context) const;
+
     void define_schemas(xsd::SchemaContext& context) const;
 
     void parse_messages(CompilationContext& context) const;

@@ -42,6 +42,7 @@ struct SchemaContext {
     std::unordered_set<std::string> visited_documents;
 };
 
+// Parsed simple-type definition, with dependencies represented by TypeRef(s)
 // https://www.w3.org/TR/xmlschema-1/#Simple_Type_Definitions
 class SimpleParsedType {
 public:
@@ -95,7 +96,7 @@ public:
     };
 
     struct Element {
-        std::string name;
+        std::string name; // XML local name of the declared or referenced element.
         TypeRef type;
         Occurs occurs;
     };
@@ -116,12 +117,14 @@ public:
         std::vector<Attribute> attributes;
     };
 
+    // Simple-valued content derived from a base type, with attribute declarations.
     struct SimpleContent {
         TypeRef base;
         Derivation derivation;
         std::vector<Attribute> attributes;
     };
 
+    // Complex content derived from a base type, with element and attribute declarations.
     struct ComplexContent {
         TypeRef base;
         Derivation derivation;
@@ -137,31 +140,38 @@ private:
     explicit ComplexParsedType(Definition definition);
 
 public:
-    static ComplexParsedType from_node(const xml::node_view& complex_type, wsdl::TypeTable& type_table);
+    static ComplexParsedType from_node(const xml::node_view& complex_type, SchemaContext& context);
 
     [[nodiscard]] const Definition& definition() const noexcept;
 
 private:
     static Occurs parse_occurs(const xml::node_view& element);
 
+    // Resolves a declaration's type and parses its inline definition, if present.
     static TypeRef parse_declaration_type(
         const xml::node_view& declaration,
         bool allow_complex,
-        wsdl::TypeTable& type_table);
+        SchemaContext& context);
 
-    static Element parse_element(const xml::node_view& element, wsdl::TypeTable& type_table);
+    // Resolves a named or default type, or reserves an ID for an inline type.
+    static TypeRef declaration_type(const xml::node_view& declaration, bool allow_complex, wsdl::TypeTable& type_table);
 
-    static Attribute parse_attribute(const xml::node_view& attribute, wsdl::TypeTable& type_table);
+    // Defines a declaration's inline type at the supplied type ID, if present.
+    static void define_inline_type(const xml::node_view& declaration, TypeRef id, SchemaContext& context);
 
-    static std::vector<Attribute> parse_attributes(const xml::node_view& container, wsdl::TypeTable& type_table);
+    static Element parse_element(const xml::node_view& element, SchemaContext& context);
 
-    static Sequence parse_sequence(const xml::node_view& sequence,wsdl::TypeTable& type_table);
+    static Attribute parse_attribute(const xml::node_view& attribute, SchemaContext& context);
 
-    static ComplexParsedType parse_direct_content(const xml::node_view& complex_type, wsdl::TypeTable& type_table);
+    static std::vector<Attribute> parse_attributes(const xml::node_view& container, SchemaContext& context);
 
-    static ComplexParsedType parse_simple_content(const xml::node_view& simple_content, wsdl::TypeTable& type_table);
+    static Sequence parse_sequence(const xml::node_view& sequence, SchemaContext& context);
 
-    static ComplexParsedType parse_complex_content(const xml::node_view& complex_content, wsdl::TypeTable& type_table);
+    static ComplexParsedType parse_direct_content(const xml::node_view& complex_type, SchemaContext& context);
+
+    static ComplexParsedType parse_simple_content(const xml::node_view& simple_content, SchemaContext& context);
+
+    static ComplexParsedType parse_complex_content(const xml::node_view& complex_content, SchemaContext& context);
 };
 
 class XSDSchema {
@@ -176,11 +186,13 @@ public:
 
     explicit XSDSchema(xml::node_view schema, xml::uri&& base);
 
-    [[nodiscard]] const std::string& target_namespace() const noexcept {
-        return target_namespace_;
-    }
+    [[nodiscard]] const std::string& target_namespace() const noexcept { return target_namespace_; }
 
+    // Declare named types and (named) global elements
     void declare_types(SchemaContext& context) const;
+
+    // Resolve the types for each declared global element, or reserve an ID for an inline type.
+    void bind_elements(SchemaContext& context) const;
 
     void define_types(SchemaContext& context) const;
 
@@ -191,6 +203,7 @@ private:
     // Given a local name, return the qualified name in this schema's target namespace.
     [[nodiscard]] xml::qname declared_name(std::string_view name) const;
 
+    // mark this document's base URI as visited in the schema context, returning true if it was not already visited
     [[nodiscard]] bool mark_visited(SchemaContext& context) const;
 
     // if this backs a document (i.e. no other document embeds this scheme, such as in wsdl's <types>),
