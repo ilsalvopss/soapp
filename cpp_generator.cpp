@@ -6,6 +6,7 @@
 
 #include <cassert>
 #include <functional>
+#include <optional>
 #include <ostream>
 #include <span>
 #include <stdexcept>
@@ -101,7 +102,7 @@ void write_sequence(const xsd::ComplexParsedType::Sequence& sequence, const Name
         if (element.occurs.max == 0)
             continue;
 
-        const auto wrapper = // FIXME: use custom helper types eg. ::soapp::builtin_types::Multiplicity<...
+        const auto wrapper =
             element.occurs.max != 1 ? "::std::vector" : element.occurs.min == 0 ? "::std::optional" : "";
 
         write_field(element.type, names.element(owner, i), wrapper, names, writer);
@@ -116,61 +117,78 @@ void write_attributes(const std::span<const xsd::ComplexParsedType::Attribute> a
         if (attribute.prohibited)
             continue;
 
-        const auto wrapper = // FIXME: use custom helper types eg. ::soapp::builtin_types::NotRequired<...
+        const auto wrapper =
             attribute.required ? "" : "::std::optional";
 
         write_field(attribute.type, names.attribute(owner, i), wrapper, names, writer);
     }
 }
 
-void write_complex_type(const wsdl::TypeTable& types, const Names& names, const TypeRef id, CodeWriter& writer,
-                        const bool just_placeholder) {
+void write_complex_placeholder(const Names& names, const TypeRef id, const std::string_view reason,
+                               CodeWriter& writer) {
+    writer.line("// TODO: " + std::string{ reason });
+    writer.line("struct " + std::string{ names.type(id) } + " : ::soapp::builtin_types::Unimplemented {};");
+}
 
-    const auto& complex = std::get<xsd::ComplexParsedType>(types.get(id).definition());
-
-    const auto* content = std::get_if<xsd::ComplexParsedType::DirectContent>(&complex.definition());
-    const auto* simple = std::get_if<xsd::ComplexParsedType::SimpleContent>(&complex.definition());
-    const auto* derived = std::get_if<xsd::ComplexParsedType::ComplexContent>(&complex.definition());
-    const bool simple_extension = simple && simple->derivation == xsd::ComplexParsedType::Derivation::extension;
-    const bool complex_extension = derived && derived->derivation == xsd::ComplexParsedType::Derivation::extension;
-
-    if (just_placeholder || (!content && !simple_extension && !complex_extension)) {
-        // Just emit a placeholder for recursive types, or for complex content that we don't yet support.
-        writer.line(just_placeholder ? "// TODO: recursive complex layout" : "// TODO: unsupported yet");
-        writer.line("struct " + std::string{ names.type(id) } + " : ::soapp::builtin_types::Unimplemented {};");
-        return;
-    }
-
+void write_complex_struct(const std::optional<TypeRef> base,
+                          const std::optional<xsd::ComplexParsedType::Sequence>& sequence,
+                          const std::span<const xsd::ComplexParsedType::Attribute> attributes,
+                          const Names& names, const TypeRef id, CodeWriter& writer) {
     auto declaration = "struct " + std::string{ names.type(id) };
-    if (simple_extension)
-        declaration += " : ::" + names.qualified_type(simple->base);
-    else if (complex_extension)
-        declaration += " : ::" + names.qualified_type(derived->base);
+    if (base)
+        declaration += " : ::" + names.qualified_type(*base);
 
     writer.line(declaration + " {");
     {
         auto indentation = writer.indented();
-        if (content) {
-            if (content->sequence)
-                write_sequence(*content->sequence, names, id, writer);
-
-            write_attributes(content->attributes, names, id, writer);
-        } else if (simple_extension) {
-            write_attributes(simple->attributes, names, id, writer);
-        } else {
-            if (derived->sequence)
-                write_sequence(*derived->sequence, names, id, writer);
-
-            write_attributes(derived->attributes, names, id, writer);
-        }
+        if (sequence)
+            write_sequence(*sequence, names, id, writer);
+        write_attributes(attributes, names, id, writer);
     }
     writer.line("};");
 }
 
+void write_complex_content(const xsd::ComplexParsedType::DirectContent& content, const Names& names,
+                           const TypeRef id, CodeWriter& writer) {
+    write_complex_struct(std::nullopt, content.sequence, content.attributes, names, id, writer);
+}
+
+void write_complex_content(const xsd::ComplexParsedType::SimpleContent& content,
+                           const Names& names, const TypeRef id, CodeWriter& writer) {
+    if (content.derivation != xsd::ComplexParsedType::Derivation::extension) {
+        write_complex_placeholder(names, id, "unsupported yet", writer);
+        return;
+    }
+
+    write_complex_struct(content.base, std::nullopt, content.attributes, names, id, writer);
+}
+
+void write_complex_content(const xsd::ComplexParsedType::ComplexContent& content,
+                           const Names& names, const TypeRef id, CodeWriter& writer) {
+    if (content.derivation != xsd::ComplexParsedType::Derivation::extension) {
+        write_complex_placeholder(names, id, "unsupported yet", writer);
+        return;
+    }
+
+    write_complex_struct(content.base, content.sequence, content.attributes, names, id, writer);
+}
+
+void write_complex_type(const wsdl::TypeTable& types, const Names& names, const TypeRef id, CodeWriter& writer,
+                        const bool just_placeholder) {
+    if (just_placeholder) {
+        write_complex_placeholder(names, id, "recursive complex layout", writer);
+        return;
+    }
+
+    const auto& complex = std::get<xsd::ComplexParsedType>(types.get(id).definition());
+    std::visit([&](const auto& content) {
+        write_complex_content(content, names, id, writer);
+    }, complex.definition());
+}
+
 // Group adjacent declarations without changing their dependency order.
-void write_in_namespaces(
-    const std::span<const TypeRef> ids, const Names& names, CodeWriter& writer,
-    const std::function<void(TypeRef)>& write_type) {
+void write_in_namespaces(const std::span<const TypeRef> ids, const Names& names, CodeWriter& writer,
+                         const std::function<void(TypeRef)>& write_type) {
     for (std::size_t first = 0; first < ids.size();) {
         const auto scope = std::string{names.type_namespace(ids[first])};
         writer.line();
