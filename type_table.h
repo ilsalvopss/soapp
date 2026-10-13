@@ -46,6 +46,8 @@ public:
 
         [[nodiscard]] Definition& definition() noexcept;
 
+        [[nodiscard]] std::vector<TypeRef> dependencies(const TypeTable& type_table) const;
+
         [[nodiscard]] bool defined() const noexcept;
     };
 

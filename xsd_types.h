@@ -76,6 +76,9 @@ public:
 
     [[nodiscard]] const Definition& definition() const noexcept;
 
+    // given a type table, return the set of types on which this type depends
+    [[nodiscard]] std::vector<TypeRef> dependencies(const wsdl::TypeTable& type_table) const;
+
     [[nodiscard]] std::string print() const;
 };
 
@@ -143,6 +146,9 @@ public:
     static ComplexParsedType from_node(const xml::node_view& complex_type, SchemaContext& context);
 
     [[nodiscard]] const Definition& definition() const noexcept;
+
+    // given a type table, return the set of types on which this type depends
+    [[nodiscard]] std::vector<TypeRef> dependencies(const wsdl::TypeTable& type_table) const;
 
 private:
     static Occurs parse_occurs(const xml::node_view& element);

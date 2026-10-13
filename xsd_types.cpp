@@ -12,6 +12,7 @@
 
 #include <charconv>
 #include <iostream>
+#include <span>
 #include <utility>
 
 namespace soapp::xsd {
@@ -20,6 +21,74 @@ SimpleParsedType::SimpleParsedType(Definition definition) : definition_{std::mov
 
 const SimpleParsedType::Definition& SimpleParsedType::definition() const noexcept {
     return definition_;
+}
+
+std::vector<TypeRef> SimpleParsedType::dependencies(const wsdl::TypeTable& type_table) const {
+    std::vector<TypeRef> dependencies;
+    std::string_view role;
+
+    if (const auto* restriction = std::get_if<Restriction>(&definition())) {
+        dependencies.push_back(restriction->base);
+        role = "restriction base";
+    } else if (const auto* list = std::get_if<List>(&definition())) {
+        dependencies.push_back(list->item_type);
+        role = "list item type";
+    } else if (const auto* union_ = std::get_if<Union>(&definition())) {
+        dependencies = union_->member_types;
+        role = "union member type";
+    }
+
+    // Builtins are already complete; every other dependency must itself be simple.
+    std::erase_if(dependencies, [&](const TypeRef dependency) {
+        const auto& required = type_table.get(dependency).definition();
+        if (std::holds_alternative<BuiltinType>(required))
+            return true;
+        if (!std::holds_alternative<SimpleParsedType>(required))
+            throw std::runtime_error{"Simple-type " + std::string{ role } + " is not a simple type"};
+        return false;
+    });
+
+    return dependencies;
+}
+
+std::vector<TypeRef> ComplexParsedType::dependencies(const wsdl::TypeTable& type_table) const {
+    std::vector<TypeRef> dependencies;
+    const Sequence* sequence = nullptr;
+    std::span<const Attribute> attributes;
+
+    if (const auto* content = std::get_if<DirectContent>(&definition())) {
+        sequence = content->sequence ? &*content->sequence : nullptr;
+        attributes = content->attributes;
+    } else if (const auto* content = std::get_if<SimpleContent>(&definition())) {
+        dependencies.push_back(content->base);
+        if (content->derivation == Derivation::extension)
+            attributes = content->attributes;
+    } else if (const auto* content = std::get_if<ComplexContent>(&definition())) {
+        dependencies.push_back(content->base);
+
+        if (content->derivation == Derivation::extension) {
+            sequence = content->sequence ? &*content->sequence : nullptr;
+            attributes = content->attributes;
+        }
+    }
+
+    if (sequence)
+        for (const auto& element : sequence->elements)
+            if (element.occurs.max != 0)
+                dependencies.push_back(element.type);
+    for (const auto& attribute : attributes)
+        if (!attribute.prohibited)
+            dependencies.push_back(attribute.type);
+
+    std::erase_if(dependencies, [&](const TypeRef dependency) {
+        const auto& required = type_table.get(dependency).definition();
+        if (std::holds_alternative<xsd::BuiltinType>(required))
+            return true;
+        if (std::holds_alternative<std::monostate>(required))
+            throw std::runtime_error{"Undefined type dependency: " + std::to_string(dependency)};
+        return false;
+    });
+    return dependencies;
 }
 
 std::string SimpleParsedType::print() const {

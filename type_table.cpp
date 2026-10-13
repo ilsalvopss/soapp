@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace soapp::wsdl {
@@ -29,6 +30,16 @@ const TypeTable::Definition& TypeTable::Type::definition() const noexcept {
 
 TypeTable::Definition& TypeTable::Type::definition() noexcept {
     return definition_;
+}
+
+std::vector<TypeRef> TypeTable::Type::dependencies(const TypeTable& type_table) const {
+    return std::visit([&](const auto& definition) -> std::vector<TypeRef> {
+        using T = std::remove_cvref_t<decltype(definition)>;
+        if constexpr (std::is_same_v<T, std::monostate> || std::is_same_v<T, xsd::BuiltinType>)
+            return {};
+        else
+            return definition.dependencies(type_table);
+    }, definition_);
 }
 
 bool TypeTable::Type::defined() const noexcept {
