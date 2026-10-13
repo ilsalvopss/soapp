@@ -187,19 +187,44 @@ void write_complex_type(const wsdl::TypeTable& types, const Names& names, const 
 }
 
 // Group adjacent declarations without changing their dependency order.
-void write_in_namespaces(const std::span<const TypeRef> ids, const Names& names, CodeWriter& writer,
-                         const std::function<void(TypeRef)>& write_type) {
+void write_namespace_groups(const std::span<const TypeRef> ids, const Names& names, CodeWriter& writer,
+                            const std::function<void(TypeRef)>& write_type,
+                            const std::string_view parent_scope) {
     for (std::size_t first = 0; first < ids.size();) {
-        const auto scope = std::string{names.type_namespace(ids[first])};
+        const auto scope = names.type_namespace(ids[first]);
         writer.line();
-        writer.line("namespace " + scope + " {");
+
+        if (scope == parent_scope) {
+            while (first < ids.size() && names.type_namespace(ids[first]) == scope)
+                write_type(ids[first++]);
+            continue;
+        }
+
+        const auto relative_scope = scope.substr(parent_scope.size() + 2);
+        writer.line("namespace " + std::string{ relative_scope } + " {");
         {
             auto indentation = writer.indented();
             while (first < ids.size() && names.type_namespace(ids[first]) == scope)
                 write_type(ids[first++]);
         }
-        writer.line("} // namespace " + scope);
+        writer.line("} // namespace " + std::string{ relative_scope });
     }
+}
+
+void write_in_namespaces(const std::span<const TypeRef> ids, const Names& names, CodeWriter& writer,
+                         const std::function<void(TypeRef)>& write_type) {
+    if (ids.empty())
+        return;
+
+    constexpr std::string_view generated_scope = "soapp::generated";
+
+    writer.line();
+    writer.line("namespace " + std::string{ generated_scope } + " {");
+    {
+        auto indentation = writer.indented();
+        write_namespace_groups(ids, names, writer, write_type, generated_scope);
+    }
+    writer.line("} // namespace " + std::string{ generated_scope });
 }
 
 } // namespace
