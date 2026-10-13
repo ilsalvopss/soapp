@@ -165,15 +165,11 @@ void WSDL11::parse_types(CompilationContext& context) const {
     xsd::SchemaContext declaration_context{ context.types, context.elements };
     declare_schemas(declaration_context);
 
-    std::cout << "Declared " << context.types.size() << " types" << std::endl;
-
     xsd::SchemaContext binding_context{ context.types, context.elements };
     bind_schema_elements(binding_context);
 
     xsd::SchemaContext definition_context{ context.types, context.elements };
     define_schemas(definition_context);
-
-    std::cout << "Defined " << context.types.size() << " types" << std::endl;
 
     parse_messages(context);
 }
