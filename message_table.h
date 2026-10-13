@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace soapp::wsdl {
@@ -21,8 +22,6 @@ public:
         std::string name;
         TypeRef type;
         std::optional<xml::qname> element;
-
-        friend class Message;
 
     public:
         Part(std::string name, TypeRef type, std::optional<xml::qname> element = std::nullopt) :

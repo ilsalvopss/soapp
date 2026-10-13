@@ -16,6 +16,7 @@ int main() {
     soapp::wsdl::CompilationContext context;
 
     w.parse_types(context);
+    w.parse_messages(context);
 
     const soapp::cpp::Names names{ context.types };
     soapp::cpp::write_header(context.types, names, std::cout);

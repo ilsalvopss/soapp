@@ -124,12 +124,9 @@ void WSDL11::parse_messages(CompilationContext& context) const {
 
         const auto message_name = declared_name(name->view());
         if (context.messages.contains(message_name))
-            throw error {
-                "Duplicate wsdl:message declaration: " + std::string{message_name.local_name()}
-            };
+            throw error { "Duplicate wsdl:message declaration: " + std::string{ message_name.local_name() } };
 
         std::vector<Message::Part> parts;
-
         for (const auto part : message_node.children("part", ns_uri)) {
             const auto part_name = part.attribute("name");
             const auto element = part.attribute("element");
@@ -138,21 +135,22 @@ void WSDL11::parse_messages(CompilationContext& context) const {
             if (!part_name)
                 throw error{ "Missing required wsdl:part/@name" };
 
-            if (element && type || !element && !type)
+            if (element.has_value() == type.has_value())
                 throw error{ "wsdl:part must contain exactly one of @element or @type" };
 
             if (element) {
                 const auto element_name = part.resolve_qname(element->view());
+                const auto resolved_type = context.elements.resolve(element_name);
 
                 parts.emplace_back(
-                    std::string{part_name->view()},
-                    context.elements.resolve(element_name),
+                    std::string{ part_name->view() },
+                    resolved_type,
                     element_name
                 );
             } else {
-                const auto type_name = part.resolve_qname(type->view());
+                const auto resolved_type = context.types.resolve(part.resolve_qname(type->view()));
 
-                parts.emplace_back(std::string{part_name->view()}, context.types.resolve(type_name));
+                parts.emplace_back(std::string{ part_name->view() }, resolved_type);
             }
         }
 
@@ -170,8 +168,6 @@ void WSDL11::parse_types(CompilationContext& context) const {
 
     xsd::SchemaContext definition_context{ context.types, context.elements };
     define_schemas(definition_context);
-
-    parse_messages(context);
 }
 
 } // namespace soapp::wsdl

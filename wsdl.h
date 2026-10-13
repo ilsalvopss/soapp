@@ -46,8 +46,6 @@ class WSDL11 : protected xml::document {
 
     void define_schemas(xsd::SchemaContext& context) const;
 
-    void parse_messages(CompilationContext& context) const;
-
 public:
     class error : public std::runtime_error {
     public:
@@ -61,6 +59,8 @@ public:
     explicit WSDL11(xml::document&& doc);
 
     void parse_types(CompilationContext& context) const;
+
+    void parse_messages(CompilationContext& context) const;
 };
 
 }
