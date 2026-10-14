@@ -17,6 +17,7 @@ int main() {
 
     w.parse_types(context);
     w.parse_messages(context);
+    w.parse_port_types(context);
 
     const soapp::cpp::Names names{ context.types };
     soapp::cpp::write_header(context.types, names, std::cout);

@@ -7,6 +7,7 @@
 
 #include "element_table.h"
 #include "message_table.h"
+#include "port_type_table.h"
 #include "xml.h"
 #include "xsd_types.h"
 #include "type_table.h"
@@ -23,6 +24,7 @@ struct CompilationContext {
     TypeTable types;
     xsd::ElementTable elements;
     MessageTable messages;
+    PortTypeTable port_types;
 };
 
 class WSDL11 : protected xml::document {
@@ -61,6 +63,8 @@ public:
     void parse_types(CompilationContext& context) const;
 
     void parse_messages(CompilationContext& context) const;
+
+    void parse_port_types(CompilationContext& context) const;
 };
 
 }

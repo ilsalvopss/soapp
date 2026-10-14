@@ -158,6 +158,69 @@ void WSDL11::parse_messages(CompilationContext& context) const {
     }
 }
 
+void WSDL11::parse_port_types(CompilationContext& context) const {
+    for (const auto& wsdl : imported_wsdl)
+        wsdl.parse_port_types(context);
+
+    const auto resolve_message = [&](const xml::node_view& node) {
+        const auto message = node.attribute("message");
+        if (!message)
+            throw error{ "Missing required wsdl:" + std::string{ node.name() } + "/@message" };
+
+        auto name = node.resolve_qname(message->view());
+        if (!context.messages.contains(name))
+            throw error{ "Unknown wsdl:message: " + std::string{name.ns_uri()} + ":" + std::string{name.local_name()} };
+
+        return name;
+    };
+
+    for (const auto port_type_node : definitions.children("portType", ns_uri)) {
+        const auto name = port_type_node.attribute("name");
+        if (!name)
+            throw error{ "Missing required wsdl:portType/@name" };
+
+        const auto port_type_name = declared_name(name->view());
+        if (context.port_types.contains(port_type_name))
+            throw error{ "Duplicate wsdl:portType declaration: " + std::string{port_type_name.local_name()} };
+
+        std::vector<PortType::Operation> operations;
+        for (const auto operation_node : port_type_node.children("operation", ns_uri)) {
+            const auto operation_name = operation_node.attribute("name");
+            if (!operation_name)
+                throw error{ "Missing required wsdl:operation/@name" };
+
+            std::optional<xml::node_view> input;
+            std::optional<xml::node_view> output;
+            for (const auto child : operation_node.children()) {
+                if (child.is("input", ns_uri)) {
+                    if (input)
+                        throw error{ "wsdl:operation contains multiple wsdl:input elements" };
+                    if (output) // input after output! look at the grammar in § 2.4.3 Solicit-response Operation
+                        throw error{ "Solicit-response operations are not supported" };
+                    input = child;
+                } else if (child.is("output", ns_uri)) {
+                    if (output)
+                        throw error{ "wsdl:operation contains multiple wsdl:output elements" };
+                    output = child;
+                }
+            }
+
+            if (!input)
+                throw error{ "wsdl:operation must contain a wsdl:input in our current implementation, sorry" };
+
+            auto input_message = resolve_message(*input);
+            std::optional<xml::qname> output_message;
+            if (output)
+                output_message = resolve_message(*output);
+
+            operations.emplace_back(std::string{operation_name->view()}, std::move(input_message),
+                                    std::move(output_message));
+        }
+
+        context.port_types.emplace(port_type_name, PortType{port_type_name, std::move(operations)});
+    }
+}
+
 void WSDL11::parse_types(CompilationContext& context) const {
     // declaration phase!
     xsd::SchemaContext declaration_context{ context.types, context.elements };
