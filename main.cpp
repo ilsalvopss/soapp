@@ -5,7 +5,7 @@
 #include "cpp_generator.h"
 
 int main() {
-    const auto path = std::filesystem::absolute("../tests/devicemgmt.wsdl");
+    const auto path = std::filesystem::absolute("../tests/media.wsdl");
     std::ifstream t{path};
 
     std::string str((std::istreambuf_iterator<char>(t)),
@@ -20,5 +20,5 @@ int main() {
     w.parse_port_types(context);
 
     const soapp::cpp::Names names{ context };
-    soapp::cpp::write_header(context.types, names, std::cout);
+    soapp::cpp::write_header(context, names, std::cout);
 }

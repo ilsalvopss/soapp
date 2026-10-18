@@ -11,7 +11,7 @@
 #include <string_view>
 
 namespace soapp::wsdl {
-class TypeTable;
+struct CompilationContext;
 }
 
 namespace soapp::cpp {
@@ -49,11 +49,8 @@ private:
     std::size_t depth_ = 0;
 };
 
-// Emit both type kinds in dependency order, sharing names with other emitters.
-void write_declarations(const wsdl::TypeTable& types, const Names& names, CodeWriter& writer);
-
-// Assemble a complete header: its prologue belongs here, rather than to each emitter.
-void write_header(const wsdl::TypeTable& types, const Names& names, std::ostream& out);
+// Emit schema types, messages, and port-type classes into a complete C++ header.
+void write_header(const wsdl::CompilationContext& context, const Names& names, std::ostream& out);
 
 } // namespace soapp::cpp
 
