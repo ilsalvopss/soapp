@@ -79,9 +79,10 @@ namespace {
     }
 }
 
-// Claim names in source order, reserving the enclosing class name.
-[[nodiscard]] std::vector<std::string> claim_member_names(const auto& members, const std::string& owner) {
-    std::unordered_set<std::string> used{owner};
+// Claim names in source order, reserving the enclosing class name and any inherited members.
+[[nodiscard]] std::vector<std::string> claim_member_names(const auto& members, const std::string& owner,
+                                                          std::unordered_set<std::string> used = {}) {
+    used.emplace(owner);
     std::vector<std::string> names;
     for (const auto& member : members)
         names.push_back(claim(identifier(member.get_name()), used));
@@ -379,12 +380,15 @@ void Names::assign_declaration_names(const wsdl::CompilationContext& context) {
         members = claim_member_names(message.get_parts(), local);
     }
 
-    // 4. Claim port-type names after messages, then assign their operations
+    // 4. Claim port-type names and operations, reserving inherited endpoint members
+    const std::unordered_set<std::string> endpoint_members{"get_url", "set_url", "invoke"};
+
     for (const auto& [name, port_type] : context.port_types) {
         auto& [local, members] = port_types_[name];
         auto& used_in_scope = used[std::string{ namespace_name(name.ns_uri()) }];
+        used_in_scope.insert(endpoint_members.begin(), endpoint_members.end());
         local = claim(identifier(name.local_name()), used_in_scope);
-        members = claim_member_names(port_type.get_operations(), local);
+        members = claim_member_names(port_type.get_operations(), local, endpoint_members);
     }
 }
 

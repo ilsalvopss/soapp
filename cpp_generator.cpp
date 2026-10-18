@@ -282,10 +282,16 @@ void write_operation(const wsdl::PortType::Operation& operation, const xml::qnam
 
     std::string parameter;
     const auto& input = operation.get_input_message();
-    if (!messages.at(input).get_parts().empty())
+    const bool has_request = !messages.at(input).get_parts().empty();
+    if (has_request)
         parameter = "const ::" + names.qualified_message(input) + "& request";
 
-    writer.line(result + ' ' + std::string{ names.operation(owner, index) } + '(' + parameter + ");");
+    writer.line(result + ' ' + std::string{ names.operation(owner, index) } + '(' + parameter + ") {");
+    {
+        auto indentation = writer.indented();
+        writer.line("return invoke<" + result + ">(" + (has_request ? "request" : "") + ");");
+    }
+    writer.line("}");
 }
 
 void write_port_type(const wsdl::PortType& port_type, const wsdl::MessageTable& messages,
@@ -293,10 +299,12 @@ void write_port_type(const wsdl::PortType& port_type, const wsdl::MessageTable& 
     const auto& name = port_type.get_name();
     const auto& operations = port_type.get_operations();
 
-    writer.line("class " + std::string{ names.port_type(name) } + " {");
+    writer.line("class " + std::string{ names.port_type(name) } + " : public ::soapp::soap::endpoint {");
     writer.line("public:");
     {
         auto indentation = writer.indented();
+        writer.line("using ::soapp::soap::endpoint::endpoint;");
+        writer.line();
         for (std::size_t i = 0; i < operations.size(); ++i)
             write_operation(operations[i], name, i, messages, names, writer);
     }
@@ -310,6 +318,7 @@ void write_header(const wsdl::CompilationContext& context, const Names& names, s
 
     writer.line("#pragma once");
     writer.line("#include \"cpp_builtin_types.h\"");
+    writer.line("#include \"soap.h\"");
     writer.line("#include <optional>");
     writer.line("#include <vector>");
 
