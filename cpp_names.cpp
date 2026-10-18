@@ -5,17 +5,17 @@
 #include "cpp_names.h"
 
 #include "type_table.h"
+#include "wsdl.h"
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <functional>
-#include <map>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <variant>
 
 namespace soapp::cpp {
@@ -68,7 +68,7 @@ namespace {
 }
 
 // Reserve a name, adding the first available numeric suffix when necessary.
-[[nodiscard]] std::string claim(std::string base, std::unordered_set<std::string>& used) {
+[[nodiscard]] std::string claim(const std::string& base, std::unordered_set<std::string>& used) {
     if (used.emplace(base).second)
         return base;
 
@@ -79,30 +79,18 @@ namespace {
     }
 }
 
-[[nodiscard]] std::vector<std::string> assign_local_names(const std::vector<std::string>& bases,
-                                                          std::unordered_set<std::string> used) {
-    std::unordered_map<std::string, std::size_t> counts;
-    std::vector<std::string> names(bases.size());
-
-    for (const auto& base : bases) {
-        if (!base.empty())
-            ++counts[base];
-    }
-
-    for (std::size_t i = 0; i < bases.size(); ++i) {
-        if (!bases[i].empty() && counts[bases[i]] == 1 && used.emplace(bases[i]).second)
-            names[i] = bases[i];
-    }
-
-    for (std::size_t i = 0; i < bases.size(); ++i) {
-        if (!bases[i].empty() && names[i].empty())
-            names[i] = claim(bases[i], used);
-    }
+// Claim names in source order, reserving the enclosing class name.
+[[nodiscard]] std::vector<std::string> claim_member_names(const auto& members, const std::string& owner) {
+    std::unordered_set<std::string> used{owner};
+    std::vector<std::string> names;
+    for (const auto& member : members)
+        names.push_back(claim(identifier(member.get_name()), used));
 
     return names;
 }
 
-void append_parts(std::vector<std::string>& parts, std::string_view value, const std::string_view separators) {
+// Split a string into parts, using any of the characters in `separators` as delimiters.
+void explode_into_parts(std::vector<std::string>& parts, std::string_view value, const std::string_view separators) {
     while (!value.empty()) {
         const auto end = value.find_first_of(separators);
         if (end != 0)
@@ -113,12 +101,13 @@ void append_parts(std::vector<std::string>& parts, std::string_view value, const
     }
 }
 
-// A readable URI mapping: dropping www, the TLD and trailing wsdl may cause collisions.
+// A readable URI to c++ namespace mapping
 [[nodiscard]] std::string namespace_path(std::string_view uri) {
     if (uri.empty())
         return "no_namespace";
 
     std::vector<std::string> parts;
+
     if (uri.starts_with("http://") || uri.starts_with("https://")) {
         uri.remove_prefix(uri.find("://") + 3);
         const auto end = uri.find_first_of("/?#");
@@ -127,7 +116,7 @@ void append_parts(std::vector<std::string>& parts, std::string_view value, const
             host.remove_prefix(4);
 
         std::vector<std::string> labels;
-        append_parts(labels, host, ".");
+        explode_into_parts(labels, host, ".");
 
         if (labels.size() > 1)
             labels.pop_back(); // drop TLD
@@ -139,15 +128,15 @@ void append_parts(std::vector<std::string>& parts, std::string_view value, const
             uri.remove_prefix(end);
             const auto path_end = uri.find_first_of("?#");
             std::vector<std::string> path;
-            append_parts(path, uri.substr(0, path_end), "/");
+            explode_into_parts(path, uri.substr(0, path_end), "/");
             if (path.size() > 1 && path.back() == "wsdl")
                 path.pop_back();
             parts.insert(parts.end(), path.begin(), path.end());
             if (path_end != std::string_view::npos)
-                append_parts(parts, uri.substr(path_end), "?#&=");
+                explode_into_parts(parts, uri.substr(path_end), "?#&=");
         }
     } else {
-        append_parts(parts, uri, ":/?#&=");
+        explode_into_parts(parts, uri, ":/?#&=");
     }
 
     if (parts.empty())
@@ -162,43 +151,65 @@ void append_parts(std::vector<std::string>& parts, std::string_view value, const
 
 constexpr std::string_view generated_namespace = "soapp::generated";
 constexpr std::string_view builtin_namespace = "soapp::builtin_types";
-using UsedNames = std::unordered_map<std::string, std::unordered_set<std::string>>;
 
-// A type and a child namespace cannot use the same identifier in their parent scope.
-void reserve_child_namespaces(std::string_view path, UsedNames& used) {
-    path.remove_prefix(generated_namespace.size());
-    auto parent = std::string{ generated_namespace };
+// A mapping from parent namespace to child identifiers already used in that namespace.
+using NsToUsedMap = std::unordered_map<std::string, std::unordered_set<std::string>>;
 
-    while (path.starts_with("::")) {
-        path.remove_prefix(2);
-        const auto end = path.find("::");
-        const auto child = std::string{ path.substr(0, end) };
+// Collect child namespace identifiers already occupied in each parent namespace.
+// `namespace_paths` is a range of qualified C++ paths under soapp::generated
+template<typename NS_T>
+requires std::ranges::input_range<const NS_T> &&
+         std::convertible_to<std::ranges::range_reference_t<const NS_T>, std::string_view>
+[[nodiscard]] NsToUsedMap reserved_namespace_names(const NS_T& namespace_paths) {
+    NsToUsedMap used;
 
-        used[parent].emplace(child);
-        parent += "::" + child;
+    for (std::string_view path : namespace_paths) {
+        if (path == builtin_namespace)
+            continue;
 
-        if (end == std::string_view::npos)
-            break;
+        path.remove_prefix(generated_namespace.size());
+        auto parent = std::string{ generated_namespace };
 
-        path.remove_prefix(end);
+        while (path.starts_with("::")) {
+            path.remove_prefix(2);
+            const auto end = path.find("::");
+            const auto child = std::string{ path.substr(0, end) };
+
+            used[parent].emplace(child);
+            parent += "::" + child;
+
+            if (end == std::string_view::npos)
+                break;
+
+            path.remove_prefix(end);
+        }
     }
+
+    return used;
+}
+
+// Extract a list of all namespaces used in message and port-type declarations
+[[nodiscard]] std::vector<std::string_view> declaration_namespaces(const wsdl::CompilationContext& context) {
+    std::vector<std::string_view> namespaces;
+    for (const auto& name: context.messages | std::views::keys)
+        namespaces.push_back(name.ns_uri());
+    for (const auto& name: context.port_types | std::views::keys)
+        namespaces.push_back(name.ns_uri());
+    return namespaces;
 }
 
 } // namespace
 
-[[nodiscard]] Names::NamespaceNames Names::namespace_names(
-    const wsdl::TypeTable& types, const std::span<const std::string_view> extra_namespaces) {
+// Given a WSDL type table and a list of extra namespaces, return a mapping from namespace URI to C++ namespace name.
+[[nodiscard]] Names::NamespaceNames Names::namespace_names(const wsdl::TypeTable& types,
+                                                           const std::span<const std::string_view> extra_namespaces) {
     NamespaceNames scopes;
-    std::unordered_map<std::string, std::size_t> counts;
 
     const auto add_namespace = [&](const std::string_view uri) {
         if (uri == xsd::ns_uri)
             return; // The scope of XML schema builtins is fixed, and they are not counted for collisions.
 
-        // Different ns uris may map to the same C++ namespace path; let's notice if this happens
-        const auto [entry, inserted] = scopes.emplace(std::string { uri }, namespace_path(uri));
-        if (inserted)
-            ++counts[entry->second];
+        scopes.emplace(std::string{ uri }, namespace_path(uri));
     };
 
     types.for_each([&](const auto& type) {
@@ -209,18 +220,10 @@ void reserve_child_namespaces(std::string_view path, UsedNames& used) {
     for (const auto uri : extra_namespaces)
         add_namespace(uri);
 
-    // Protect naturally unique paths before suffixes are assigned to colliding paths.
-    // std::map keeps the choice of which URI gets a suffix deterministic.
+    // Allocate paths in URI order so collision suffixes are deterministic.
     std::unordered_set<std::string> used;
-    for (const auto& scope : scopes | std::views::values)
-        if (counts[scope] == 1)
-            used.emplace(scope);
     for (auto& scope : scopes | std::views::values)
-        if (counts[scope] > 1)
-            scope = claim(scope, used);
-
-    for (auto& scope : scopes | std::views::values)
-        scope = std::string{ generated_namespace } + "::" + scope;
+        scope = std::string{ generated_namespace } + "::" + claim(scope, used);
 
     scopes.emplace(std::string{ xsd::ns_uri }, std::string{ builtin_namespace });
 
@@ -233,6 +236,10 @@ Names::Names(const wsdl::TypeTable& types, const std::span<const std::string_vie
     assign_scopes(types);
     assign_type_names(types);
     assign_member_names(types);
+}
+
+Names::Names(const wsdl::CompilationContext& context) : Names(context.types, declaration_namespaces(context)) {
+    assign_declaration_names(context);
 }
 
 void Names::assign_scopes(const wsdl::TypeTable& types) {
@@ -252,53 +259,17 @@ void Names::assign_scopes(const wsdl::TypeTable& types) {
 }
 
 void Names::assign_type_names(const wsdl::TypeTable& types) {
-    std::vector<std::string> bases(types.size());
-    std::unordered_map<std::string, std::size_t> counts;
-    UsedNames used;
-
-    for (const auto& scope : namespaces_ | std::views::values)
-        if (scope != builtin_namespace)
-            reserve_child_namespaces(scope, used);
+    auto used = reserved_namespace_names(namespaces_ | std::views::values);
 
     types.for_each([&](const auto& type) {
+        auto& named = types_[type.id()];
         if (std::holds_alternative<xsd::BuiltinType>(type.definition())) {
-            const auto& name = types_[type.id()];
-            used[name.scope].emplace(name.local);
+            used[named.scope].emplace(named.local);
             return;
         }
 
-        const auto id = type.id();
-        const auto& scope = types_[id].scope;
-
-        bases[id] = type.name() ? identifier(type.name()->local_name()) : "AnonymousType_" + std::to_string(id);
-        ++counts[scope + "::" + bases[id]];
-    });
-
-    // Case 1: A type name is unique in its namespace, and no child namespace has the same name.
-    types.for_each([&](const auto& type) {
-        const auto id = type.id();
-        const auto& scope = types_[id].scope;
-
-        if (!bases[id].empty() && counts[scope + "::" + bases[id]] == 1 && !used[scope].contains(bases[id])) {
-            types_[id].local = bases[id];
-            used[scope].emplace(bases[id]);
-        }
-    });
-
-    // Case 2: Resolve remaining collisions for named declarations before anonymous types.
-    types.for_each([&](const auto& type) {
-        const auto id = type.id();
-
-        if (!bases[id].empty() && types_[id].local.empty() && type.name())
-            types_[id].local = claim(bases[id], used[types_[id].scope]);
-    });
-
-    // Case 3: Resolve remaining collisions for anonymous types.
-    types.for_each([&](const auto& type) {
-        const auto id = type.id();
-
-        if (!bases[id].empty() && types_[id].local.empty())
-            types_[id].local = claim(bases[id], used[types_[id].scope]);
+        const auto base = type.name() ? identifier(type.name()->local_name()) : "AnonymousType_" + std::to_string(type.id());
+        named.local = claim(base, used[named.scope]);
     });
 }
 
@@ -359,31 +330,31 @@ void Names::assign_member_names(const wsdl::TypeTable& types) {
         if (base)
             assigned_in_scope = inherited_names[*base];
 
+        auto& named = types_[id];
+        auto used = assigned_in_scope;
+        used.emplace(named.local); // Reserve this class's constructor name in its own scope.
+
         const auto element_count = sequence ? sequence->elements.size() : 0;
-        std::vector<std::string> bases(element_count + attributes.size());
+        named.elements.resize(element_count);
+        named.attributes.resize(attributes.size());
 
         for (std::size_t i = 0; i < element_count; ++i) {
             const auto& element = sequence->elements[i];
-            if (element.occurs.max != 0)
-                bases[i] = identifier(element.name);
+            if (element.occurs.max == 0)
+                continue;
+
+            auto& name = named.elements[i];
+            name = claim(identifier(element.name), used);
+            assigned_in_scope.emplace(name);
         }
 
         for (std::size_t i = 0; i < attributes.size(); ++i) {
             if (attributes[i].prohibited)
                 continue;
-            bases[element_count + i] = identifier(attributes[i].name);
+            auto& name = named.attributes[i];
+            name = claim(identifier(attributes[i].name), used);
+            assigned_in_scope.emplace(name);
         }
-
-        auto& named = types_[id];
-        auto used = assigned_in_scope;
-        used.emplace(named.local); // Reserve this class's constructor name in its own scope.
-        const auto members = assign_local_names(bases, std::move(used));
-
-        named.elements.assign(members.begin(), members.begin() + element_count);
-        named.attributes.assign(members.begin() + element_count, members.end());
-        for (const auto& member : members)
-            if (!member.empty())
-                assigned_in_scope.emplace(member);
 
         state = State::visited;
     };
@@ -391,10 +362,36 @@ void Names::assign_member_names(const wsdl::TypeTable& types) {
     types.for_each([&](const auto& type) { assign(type.id()); });
 }
 
+void Names::assign_declaration_names(const wsdl::CompilationContext& context) {
+    // 1. Reserve already assigned namespace names in their parent namespaces
+    auto used = reserved_namespace_names(namespaces_ | std::views::values);
+
+    // 2. Reserve already assigned schema type names in their namespaces
+    for (const auto& type : types_) {
+        used[type.scope].emplace(type.local);
+    }
+
+    // 3. Claim message names, then assign their parts within the message's own scope
+    for (const auto& [name, message] : context.messages) {
+        auto& [local, members] = messages_[name];
+        auto& used_in_scope = used[std::string{ namespace_name(name.ns_uri()) }];
+        local = claim(identifier(name.local_name()), used_in_scope);
+        members = claim_member_names(message.get_parts(), local);
+    }
+
+    // 4. Claim port-type names after messages, then assign their operations
+    for (const auto& [name, port_type] : context.port_types) {
+        auto& [local, members] = port_types_[name];
+        auto& used_in_scope = used[std::string{ namespace_name(name.ns_uri()) }];
+        local = claim(identifier(name.local_name()), used_in_scope);
+        members = claim_member_names(port_type.get_operations(), local);
+    }
+}
+
 std::string_view Names::namespace_name(const std::string_view uri) const {
     const auto entry = namespaces_.find(uri);
     if (entry == namespaces_.end())
-        throw std::out_of_range{"No C++ namespace planned for URI: " + std::string{uri}};
+        throw std::out_of_range{ "No C++ namespace planned for URI: " + std::string{uri} };
 
     return entry->second;
 }
@@ -402,13 +399,9 @@ std::string_view Names::namespace_name(const std::string_view uri) const {
 std::string_view Names::type(const TypeRef id) const {
     const auto& name = types_.at(id).local;
     if (name.empty())
-        throw std::invalid_argument{"Type has no C++ name"};
+        throw std::invalid_argument{ "Type has no C++ name" };
 
     return name;
-}
-
-std::string_view Names::type_namespace(const TypeRef id) const {
-    return types_.at(id).scope;
 }
 
 std::string Names::qualified_type(const TypeRef id) const {
@@ -421,6 +414,18 @@ std::string_view Names::element(const TypeRef owner, const std::size_t index) co
 
 std::string_view Names::attribute(const TypeRef owner, const std::size_t index) const {
     return types_.at(owner).attributes.at(index);
+}
+
+std::string Names::qualified_message(const xml::qname& name) const {
+    return std::string{namespace_name(name.ns_uri())} + "::" + std::string{message(name)};
+}
+
+std::string_view Names::part(const xml::qname& owner, const std::size_t index) const {
+    return messages_.at(owner).members.at(index);
+}
+
+std::string_view Names::operation(const xml::qname& owner, const std::size_t index) const {
+    return port_types_.at(owner).members.at(index);
 }
 
 } // namespace soapp::cpp
