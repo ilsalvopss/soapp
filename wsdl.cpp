@@ -42,16 +42,16 @@ WSDL11::WSDL11(xml::document&& doc) :
         auto namespace_attr = import.attribute("namespace");
 
         if (!location_attr || !namespace_attr) {
-            std::cout << "Found wsdl:import without location/ns attribute; skipping" << std::endl;
+            std::cerr << "Found wsdl:import without location/ns attribute; skipping" << std::endl;
             continue;
         }
 
-        std::cout << "Found wsdl:import: location=" << *location_attr
+        std::cerr << "Found wsdl:import: location=" << *location_attr
                   << ", namespace=" << *namespace_attr << std::endl;
 
         auto resolved_uri = base().resolve(location_attr->zview());
         if (!base().local() && resolved_uri.local()) {
-            std::cout << "Remote WSDL wants to import local file... smelly?? Skipping" << std::endl;
+            std::cerr << "Remote WSDL wants to import local file... smelly?? Skipping" << std::endl;
             continue;
         }
 

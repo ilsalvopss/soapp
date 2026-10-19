@@ -24,5 +24,5 @@ add_library(soapp
 target_link_libraries(soapp PUBLIC fmt::fmt OpenSSL::SSL CURL::libcurl LibXml2::LibXml2)
 target_include_directories(soapp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(wsdl2pp main.cpp)
+add_executable(wsdl2pp wsdl2pp.cpp)
 target_link_libraries(wsdl2pp PRIVATE soapp)

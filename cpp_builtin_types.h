@@ -29,6 +29,8 @@ public:
 
 struct Unimplemented {};
 
+// https://www.w3.org/TR/xmlschema-2/#built-in-primitive-datatypes
+
 struct String : Type<std::string> {};
 struct Boolean : Type<bool> {};
 struct Float : Type<float> {};
